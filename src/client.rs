@@ -16,6 +16,7 @@ use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 use crate::general::{connect_to_signaling_server, OfferReply, register, test};
+use crate::log_on_drop::LogOnDrop;
 use crate::p2p_helper::{
     create_peer_connection, setup_peer_connection_state_change_listener,
 };
@@ -43,7 +44,7 @@ pub async fn start_client_proxy(host: &str, id: &str) -> Client {
     let id_2 = id.to_owned();
     let socket_2 = socket.clone();
 
-    tokio::spawn(async {
+    // tokio::spawn(async {
         println!("Starting Minecraft adapter");
         listen_for_minecraft_client_connections("0.0.0.0:25565", move |stream, addr| {
             println!("New connection to Minecraft client adapter");
@@ -58,7 +59,7 @@ pub async fn start_client_proxy(host: &str, id: &str) -> Client {
         }).await;
 
         loop {}
-    }).await.unwrap();
+    // }).await.unwrap();
 
     socket
 }
@@ -96,6 +97,8 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
     let peer_connection = create_peer_connection().await?;
 
     let (mut minecraft_read, minecraft_write) = minecraft_stream.into_split();
+    let mut minecraft_read = LogOnDrop::new(minecraft_read, "minecraft_read");
+    let mut minecraft_write = LogOnDrop::new(minecraft_write, "minecraft_write");
 
     let data_channel = peer_connection
         .create_data_channel(
@@ -126,7 +129,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
             // task::spawn(async move {
             loop {
                 buffer.reserve(1024);
-                let bytes_read = minecraft_read.read_buf(&mut buffer).await.unwrap();
+                let bytes_read = minecraft_read.inner.read_buf(&mut buffer).await.unwrap();
 
                 if bytes_read == 0 {
                     // Connection was closed
@@ -140,6 +143,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
                 d2.send(&chunk).await.unwrap();
                 println!("Sent data");
             }
+            println!("Done handling data_channel.on_open, not sending any more data");
             // }).await.unwrap()
         })
     }));
@@ -153,7 +157,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
         let data_2 = msg.data.clone();
         let mut minecraft_write = minecraft_write.take().unwrap();
         Box::pin(async move {
-            minecraft_write.write_all(&data_2).await.expect("Failed to write to Minecraft server");
+            minecraft_write.inner.write_all(&data_2).await.expect("Failed to write to Minecraft server");
             println!("Forwarded data from peer to Minecraft");
         })
     }));
@@ -195,7 +199,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
 
     // Apply the answer as the remote description
     peer_connection.set_remote_description(answer).await?;
-    
+
     println!("Waiting for done signal");
     done_rx.recv().await.unwrap();
     println!("Received done signal");

@@ -6,6 +6,7 @@ mod p2p_helper;
 mod server;
 mod general;
 mod reply_manager;
+mod log_on_drop;
 
 #[tokio::main]
 async fn main() {
