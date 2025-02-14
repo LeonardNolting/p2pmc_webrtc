@@ -12,7 +12,6 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::{math_rand_alpha, RTCPeerConnection};
-use anyhow::Result;
 
 /// Set the handler for Peer connection state
 /// This will notify you when the peer has connected/disconnected
@@ -84,16 +83,4 @@ pub(crate) fn send_periodic_messages(d2: Arc<RTCDataChannel>) -> Pin<Box<impl Fu
                 };
         }
     })
-}
-
-/// must_read_stdin blocks until input is received from stdin
-#[allow(clippy::assigning_clones)]
-pub fn must_read_stdin() -> Result<String> {
-    let mut line = String::new();
-
-    std::io::stdin().read_line(&mut line)?;
-    line = line.trim().to_owned();
-    println!();
-
-    Ok(line)
 }
