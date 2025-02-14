@@ -129,12 +129,13 @@ async fn connect_to_peer_as_listener(offer: String, push_reply: impl Fn(String))
 
                                     if bytes_read == 0 {
                                         // Connection was closed
+                                        println!("Read 0 bytes from Minecraft server");
                                         break;
                                     }
 
                                     // Split off the filled portion and process it
                                     let chunk = buffer.split().freeze();
-                                    println!("Sending data from Minecraft server over p2p connection");
+                                    println!("Sending {bytes_read} bytes from Minecraft server over p2p connection");
                                     d.send(&chunk).await.unwrap();
                                     println!("Sent data");
                                 }
@@ -146,7 +147,8 @@ async fn connect_to_peer_as_listener(offer: String, push_reply: impl Fn(String))
                 // Register text message handling
                 let mut minecraft_write = minecraft_write.take();
                 d.on_message(Box::new(move |msg: DataChannelMessage| {
-                    println!("Received data from peer");
+                    let len = msg.data.len();
+                    println!("Received {len} bytes from peer");
                     let mut minecraft_write = minecraft_write.take().unwrap();
                     Box::pin(async move {
                         minecraft_write.write_all(&msg.data).await.expect("Failed to write to Minecraft server");
@@ -183,16 +185,11 @@ async fn connect_to_peer_as_listener(offer: String, push_reply: impl Fn(String))
         println!("generate local_description failed!");
     }
 
-    println!("Press ctrl-c to stop");
-    tokio::select! {
-        _ = done_rx.recv() => {
-            println!("received done signal!");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            println!();
-        }
-    };
+    println!("Waiting for done signal");
+    done_rx.recv().await.unwrap();
+    println!("Received done signal");
 
+    println!("Closing peer connection");
     peer_connection.close().await?;
     // TODO close Minecraft connection?
 

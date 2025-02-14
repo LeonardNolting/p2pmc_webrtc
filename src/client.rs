@@ -130,12 +130,13 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
 
                 if bytes_read == 0 {
                     // Connection was closed
+                    println!("Read 0 bytes from Minecraft client");
                     break;
                 }
 
                 // Split off the filled portion and process it
                 let chunk = buffer.split().freeze();
-                println!("Sending data from Minecraft client over p2p connection");
+                println!("Sending {bytes_read} bytes from Minecraft client over p2p connection");
                 d2.send(&chunk).await.unwrap();
                 println!("Sent data");
             }
@@ -147,7 +148,8 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
     let d_label = data_channel.label().to_owned();
     let mut minecraft_write = Some(minecraft_write);
     data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-        println!("Received data from peer");
+        let len = msg.data.len();
+        println!("Received {len} bytes from peer");
         let data_2 = msg.data.clone();
         let mut minecraft_write = minecraft_write.take().unwrap();
         Box::pin(async move {
@@ -193,19 +195,14 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
 
     // Apply the answer as the remote description
     peer_connection.set_remote_description(answer).await?;
+    
+    println!("Waiting for done signal");
+    done_rx.recv().await.unwrap();
+    println!("Received done signal");
 
-    println!("Press ctrl-c to stop");
-    tokio::select! {
-        _ = done_rx.recv() => {
-            println!("received done signal!");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            println!();
-        }
-    }
-    ;
-
+    println!("Closing peer connection");
     peer_connection.close().await?;
+    // TODO close Minecraft connection?
 
     Ok(())
 }
