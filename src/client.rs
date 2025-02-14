@@ -38,7 +38,7 @@ pub async fn start_client_proxy(host: &str, id: &str) -> Client {
         },
     ).await;
 
-    register(id, &socket);
+    register(id, &socket).await;
 
     let id_2 = id.to_owned();
     let socket_2 = socket.clone();
@@ -75,7 +75,7 @@ async fn listen_for_minecraft_client_connections<Fut: Future, F: (Fn(TcpStream, 
     }
 }
 
-fn send_offer(offer: OfferReply, socket: &Client) {
+async fn send_offer(offer: OfferReply, socket: &Client) {
     // TODO wait for ack? return Future that resolves when ack was received?
     let socket = socket.clone();
     task::spawn_blocking(move || {
@@ -89,7 +89,7 @@ fn send_offer(offer: OfferReply, socket: &Client) {
                 },
             )
             .expect("Server unreachable");
-    });
+    }).await.unwrap();
 }
 
 async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, minecraft_stream: TcpStream, minecraft_client_addr: SocketAddr, reply_manager: Arc<ResponseManager<OfferReply>>) -> Result<()> {
@@ -183,7 +183,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
             to,
             number: offer_number,
             description: json_str.clone(),
-        }, socket);
+        }, socket).await;
         println!("Pushed offer: {json_str}");
     } else {
         println!("generate local_description failed!");

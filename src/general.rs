@@ -94,7 +94,7 @@ where
     // socket.disconnect().expect("Disconnect failed")
 }
 
-pub(crate) fn register(id: &str, socket: &Client) {
+pub(crate) async fn register(id: &str, socket: &Client) {
     let id = id.to_owned();
     let socket = socket.clone();
     task::spawn_blocking(move || {
@@ -110,5 +110,5 @@ pub(crate) fn register(id: &str, socket: &Client) {
             .expect("Server unreachable");
 
         println!("Registered on signaling server as {id}");
-    });
+    }).await.unwrap();
 }

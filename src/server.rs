@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,9 +27,12 @@ pub async fn start_server_proxy(host: &str, id: &str) {
         move |offer: OfferReply, socket| {
             async move {
                 println!("ON OFFER ARRIVED");
-                let offer = &offer;
-                connect_to_peer_as_listener(offer.description.clone(), move |description| {
-                    send_reply_to_offer(offer.clone(), &description, &socket);
+                connect_to_peer_as_listener(offer.clone().description, move |description| {
+                    let offer_4 = offer.clone();
+                    let socket_2 = socket.clone();
+                    async move {
+                        send_reply_to_offer(offer_4, &description, &socket_2).await;
+                    }
                 })
                 .await
                 .unwrap();
@@ -39,7 +43,7 @@ pub async fn start_server_proxy(host: &str, id: &str) {
 
     println!("Connected to server proxy");
 
-    register(id, &socket);
+    register(id, &socket).await;
 
     loop {
 
@@ -48,7 +52,7 @@ pub async fn start_server_proxy(host: &str, id: &str) {
     // socket
 }
 
-fn send_reply_to_offer(offer: OfferReply, description: &String, socket: &RawClient) {
+async fn send_reply_to_offer(offer: OfferReply, description: &String, socket: &RawClient) {
     let reply = OfferReply {
         id: offer.to,
         to: offer.id,
@@ -68,10 +72,14 @@ fn send_reply_to_offer(offer: OfferReply, description: &String, socket: &RawClie
                 },
             )
             .expect("Server unreachable");
-    });
+    }).await.unwrap();
 }
 
-async fn connect_to_peer_as_listener(offer: String, push_reply: impl Fn(String)) -> Result<()> {
+async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F) -> Result<()>
+where
+    F: Fn(String) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
     let peer_connection = create_peer_connection().await?;
 
     let minecraft_connection = connect_to_local_server("127.0.0.1:3000").await;
@@ -180,7 +188,7 @@ async fn connect_to_peer_as_listener(offer: String, push_reply: impl Fn(String))
 
     if let Some(local_desc) = peer_connection.local_description().await {
         let json_str = serde_json::to_string(&local_desc)?;
-        push_reply(json_str);
+        push_reply(json_str).await;
     } else {
         println!("generate local_description failed!");
     }
