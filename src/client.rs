@@ -1,68 +1,77 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
+use futures::SinkExt;
 use rand::random;
-use rust_socketio::client::Client;
-use rust_socketio::{Payload, RawClient};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tokio::task;
+use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-
-use crate::general::{connect_to_signaling_server, OfferReply, register, test};
+use url::Url;
+use crate::general::{connect_to_signaling_server, OfferReply, register, SocketTx};
+use crate::parse_server::{get_server_address, parse_server};
 use crate::log_on_drop::LogOnDrop;
 use crate::p2p_helper::{
     create_peer_connection, setup_peer_connection_state_change_listener,
 };
 use crate::reply_manager::ResponseManager;
 
-pub async fn start_client_proxy(host: &str, id: &str) -> Client {
+pub async fn start_client_proxy(host: &str, id: &str) {
     println!("Starting client proxy");
 
     let response_manager = ResponseManager::new();
 
-    let response_manager_2 = response_manager.clone();
-    let socket = connect_to_signaling_server(
+    let signaling_tx = connect_to_signaling_server(
         host,
         move |_, _| { async {} },
-        move |reply: OfferReply, socket: RawClient| {
-            let response_manager_3 = response_manager_2.clone();
-            async move {
-                response_manager_3.handle_response(reply.number, reply).await;
+        {
+            let response_manager = response_manager.clone();
+            move |reply: OfferReply, _| {
+                let response_manager = response_manager.clone();
+                async move {
+                    response_manager.handle_response(reply.number, reply).await;
+                }
             }
+        },
+        move || {
+            async move {}
         },
     ).await;
 
-    register(id, &socket).await;
+    register(id, signaling_tx.clone()).await;
 
-    let id_2 = id.to_owned();
-    let socket_2 = socket.clone();
+    let id = id.to_owned();
+    let signaling_tx = signaling_tx.clone();
 
-    // tokio::spawn(async {
-        println!("Starting Minecraft adapter");
-        listen_for_minecraft_client_connections("0.0.0.0:25565", move |stream, addr| {
+    println!("Starting Minecraft adapter");
+    listen_for_minecraft_client_connections("0.0.0.0:25565", {
+        let id = id.clone();
+        let signaling_tx = signaling_tx.clone();
+        let response_manager = response_manager.clone();
+        move |mut stream, addr| {
             println!("New connection to Minecraft client adapter");
-            let id_3 = id_2.to_owned();
-            let socket_3 = socket_2.clone();
-            let response_manager_3 = response_manager.clone();
+            let id = id.clone();
+            let signaling_tx = signaling_tx.clone();
+            let response_manager = response_manager.clone();
             async move {
                 tokio::spawn(async move {
-                    connect_to_peer_as_dialer(id_3.parse().unwrap(), "TESTID2".parse().unwrap(), &socket_3, stream, addr, response_manager_3).await.unwrap();
+                    // TODO any of the parsing fails, close all connections - need to retry
+                    let to_id = parse_server(&mut stream).await.unwrap();
+                    connect_to_peer_as_dialer(id.parse().unwrap(), to_id, signaling_tx, stream, addr, response_manager).await.unwrap();
                 }).await.unwrap();
             }
-        }).await;
+        }
+    }).await;
 
-        loop {}
-    // }).await.unwrap();
-
-    socket
+    print!("Minecraft adapter closed. Closing signaling connection... ");
+    signaling_tx.clone().lock().await.close().await.unwrap();
+    println!("Closed");
 }
 
 async fn listen_for_minecraft_client_connections<Fut: Future, F: (Fn(TcpStream, SocketAddr) -> Fut) + Send + 'static>(url: &str, on_connect: F) {
@@ -77,24 +86,12 @@ async fn listen_for_minecraft_client_connections<Fut: Future, F: (Fn(TcpStream, 
     }
 }
 
-async fn send_offer(offer: OfferReply, socket: &Client) {
-    // TODO wait for ack? return Future that resolves when ack was received?
-    let socket = socket.clone();
-    task::spawn_blocking(move || {
-        socket
-            .emit_with_ack(
-                "connections:offer",
-                serde_json::to_string(&offer).unwrap(),
-                Duration::from_secs(2),
-                |message: Payload, _| {
-                    println!("connections:offer was acked: {:#?}", message);
-                },
-            )
-            .expect("Server unreachable");
-    }).await.unwrap();
+async fn send_offer(offer: OfferReply, signaling_tx: SocketTx) {
+    signaling_tx.lock().await.send(Message::Text(Utf8Bytes::from(serde_json::to_string(&offer).unwrap()))).await.expect("Couldn't send offer");
+    println!("Sent offer");
 }
 
-async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, minecraft_stream: TcpStream, _minecraft_client_addr: SocketAddr, reply_manager: Arc<ResponseManager<OfferReply>>) -> Result<()> {
+async fn connect_to_peer_as_dialer(id: String, to: String, socket: SocketTx, minecraft_stream: TcpStream, _minecraft_client_addr: SocketAddr, reply_manager: Arc<ResponseManager<OfferReply>>) -> Result<()> {
     let peer_connection = create_peer_connection().await?;
 
     let (minecraft_read, minecraft_write) = minecraft_stream.into_split();
@@ -117,7 +114,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
 
     // Log changes to connection state
     setup_peer_connection_state_change_listener(&peer_connection, done_tx);
-    
+
     // Forward messages from Minecraft client to peer
     data_channel.on_open({
         let data_channel = Arc::clone(&data_channel);
@@ -166,7 +163,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
             print!("Received {len} bytes from peer, forwarding to Minecraft client... ");
             Box::pin(async move {
                 match minecraft_write.lock().await.inner.write_all(&msg.data).await {
-                    Ok(_) => { println!("Forwarded")}
+                    Ok(_) => { println!("Forwarded") }
                     Err(error) => {
                         println!("Failed to write to Minecraft client: {error}");
                         peer_connection.close().await.unwrap();
@@ -175,7 +172,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
             })
         })
     });
-    
+
     data_channel.on_close({
         let minecraft_write = minecraft_write.clone();
         Box::new(move || {
@@ -220,6 +217,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
     if let Some(local_desc) = peer_connection.local_description().await {
         let json_str = serde_json::to_string(&local_desc)?;
         send_offer(OfferReply {
+            r#type: "offer".to_string(),
             id,
             to,
             number: offer_number,

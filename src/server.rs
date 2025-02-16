@@ -1,87 +1,75 @@
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
-use bytes::{Bytes, BytesMut};
-use rust_socketio::{Payload, RawClient};
-use rust_socketio::client::Client;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use bytes::BytesMut;
+use futures::SinkExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::task;
+use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
-use crate::general::{connect_to_signaling_server, OfferReply, register};
+use crate::general::{connect_to_signaling_server, OfferReply, register, SocketTx};
 use crate::p2p_helper::{
     create_peer_connection, setup_peer_connection_state_change_listener,
 };
 
-pub async fn start_server_proxy(host: &str, id: &str) {
+pub async fn start_server_proxy(host: &str, id: &str, port: u16) {
     println!("Starting server proxy");
 
-    let socket = connect_to_signaling_server(
-        // connect_to_signaling_server(
+    let signaling_tx = connect_to_signaling_server(
         host,
-        move |offer: OfferReply, socket| {
+        move |offer: OfferReply, signaling_tx| {
             async move {
-                println!("ON OFFER ARRIVED");
                 connect_to_peer_as_listener(offer.clone().description, move |description| {
-                    let offer_4 = offer.clone();
-                    let socket_2 = socket.clone();
+                    let offer = offer.clone();
+                    let signaling_tx = signaling_tx.clone();
                     async move {
-                        send_reply_to_offer(offer_4, &description, &socket_2).await;
+                        send_reply_to_offer(offer, &description, signaling_tx).await;
                     }
-                })
+                }, port)
                     .await
                     .unwrap();
             }
         },
         move |_, _| { async move {} },
+        move || {
+            async move {
+                
+            }
+        }
     ).await;
 
-    println!("Connected to server proxy");
-
-    register(id, &socket).await;
+    register(id, signaling_tx).await;
 
     loop {}
 
     // socket
 }
 
-async fn send_reply_to_offer(offer: OfferReply, description: &String, socket: &RawClient) {
+async fn send_reply_to_offer(offer: OfferReply, description: &str, signaling_tx: SocketTx) {
     let reply = OfferReply {
+        r#type: "reply".to_string(),
         id: offer.to,
         to: offer.id,
         number: offer.number,
-        description: description.clone(),
+        description: description.to_string(),
     };
-    // TODO wait for ack? return Future that resolves when ack was received?
-    let socket = socket.clone();
-    task::spawn_blocking(move || {
-        socket
-            .emit_with_ack(
-                "connections:reply",
-                serde_json::to_string(&reply).unwrap(),
-                Duration::from_secs(2),
-                |message: Payload, _| {
-                    println!("connections:reply was acked: {:#?}", message);
-                },
-            )
-            .expect("Server unreachable");
-    }).await.unwrap();
+    signaling_tx.lock().await.send(Message::Text(Utf8Bytes::from(serde_json::to_string(&reply).unwrap()))).await.expect("Couldn't send reply");
+    println!("Sent reply");
 }
 
-async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F) -> Result<()>
+async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F, port: u16) -> Result<()>
 where
     F: Fn(String) -> Fut + Send + Sync + 'static,
     Fut: Future<Output=()> + Send + 'static,
 {
     let peer_connection = create_peer_connection().await?;
 
-    let minecraft_connection = connect_to_local_server("127.0.0.1:3000").await;
+    let minecraft_connection = connect_to_local_server(format!("127.0.0.1:{port}").as_str()).await;
     let (minecraft_read, minecraft_write) = minecraft_connection.into_split();
     let minecraft_write = Arc::new(Mutex::new(minecraft_write));
     let minecraft_read = Arc::new(Mutex::new(minecraft_read));
