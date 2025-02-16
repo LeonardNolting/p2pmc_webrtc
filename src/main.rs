@@ -8,13 +8,16 @@ mod general;
 mod reply_manager;
 mod log_on_drop;
 
+pub const SIGNALING_SERVER: &str = "http://34.75.203.169:5100";
+
 #[tokio::main]
 async fn main() {
     let is_client = std::env::args().nth(1).expect("Server or client?") == "client";
+    let id = std::env::args().nth(2).expect("Provide an ID");
 
     if is_client {
-        start_client_proxy("http://localhost:5100", "TESTID1").await;
+        start_client_proxy(SIGNALING_SERVER, id.as_str()).await;
     } else {
-        start_server_proxy("http://localhost:5100", "TESTID2").await;
+        start_server_proxy(SIGNALING_SERVER, id.as_str()).await;
     }
 }

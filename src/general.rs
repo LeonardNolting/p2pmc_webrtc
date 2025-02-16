@@ -17,14 +17,12 @@ pub(crate) struct OfferReply {
 }
 
 pub type OfferReplyHdlrFn = Box<
-    dyn (FnMut(OfferReply, RawClient) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>>)
+    dyn (FnMut(OfferReply, RawClient) -> Pin<Box<dyn Future<Output=()> + Send + 'static>>)
     + Send
     + Sync,
 >;
 
-pub fn test(c: OnCloseHdlrFn) {
-    
-}
+pub fn test(c: OnCloseHdlrFn) {}
 
 // async fn connect_to_signaling_server<Fut: Future, F: (Fn(OfferReply, RawClient) -> Fut) + Send + 'static>(
 pub(crate) async fn connect_to_signaling_server<OfferHandler, OfferHandlerFuture, ReplyHandler, ReplyHandlerFuture>(
@@ -34,60 +32,76 @@ pub(crate) async fn connect_to_signaling_server<OfferHandler, OfferHandlerFuture
 ) -> Client
 where
     OfferHandler: Fn(OfferReply, RawClient) -> OfferHandlerFuture + Send + Sync + 'static,
-    OfferHandlerFuture: Future<Output = ()> + Send + 'static,
+    OfferHandlerFuture: Future<Output=()> + Send + 'static,
     ReplyHandler: Fn(OfferReply, RawClient) -> ReplyHandlerFuture + Send + Sync + 'static,
-    ReplyHandlerFuture: Future<Output = ()> + Send + 'static,
+    ReplyHandlerFuture: Future<Output=()> + Send + 'static,
 {
     let host = host.to_owned();
     let on_reply = Arc::new(on_reply);
     let on_offer = Arc::new(on_offer);
-    task::spawn_blocking(move || {
-        println!("Connecting to signaling server {host}");
-        
-        let mut builder = ClientBuilder::new(host.clone());
+    let (open_tx, mut open_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let socket = task::spawn_blocking({
+        let host = host.clone();
+        move || {
+            println!("Connecting to signaling server {host}");
 
-        let rt_handle = tokio::runtime::Handle::current();
-        let rt_handle_1 = rt_handle.clone();
-        let rt_handle_2 = rt_handle.clone();
-        
-        builder = builder
-            .on(
-                "connections:offer",
-                move |payload: Payload, socket: RawClient| {
-                    let Payload::Text(json) = payload else {
-                        unreachable!()
-                    };
-                    let offer: OfferReply =
-                        serde_json::from_value(json.first().unwrap().clone()).unwrap();
-                    let on_offer = Arc::clone(&on_offer);
-                    rt_handle_1.spawn(async move {
-                        on_offer(offer, socket).await;
+            let mut builder = ClientBuilder::new(host.clone());
+
+            let rt_handle = tokio::runtime::Handle::current();
+            let rt_handle_1 = rt_handle.clone();
+            let rt_handle_2 = rt_handle.clone();
+            let rt_handle_3 = rt_handle.clone();
+            let open_tx = open_tx.clone();
+
+            builder = builder
+                .on(
+                    "connections:offer",
+                    move |payload: Payload, socket: RawClient| {
+                        let Payload::Text(json) = payload else {
+                            unreachable!()
+                        };
+                        let offer: OfferReply =
+                            serde_json::from_value(json.first().unwrap().clone()).unwrap();
+                        let on_offer = Arc::clone(&on_offer);
+                        rt_handle_1.spawn(async move {
+                            on_offer(offer, socket).await;
+                        });
+                    },
+                )
+                .on(
+                    "connections:reply",
+                    move |payload: Payload, socket: RawClient| {
+                        let Payload::Text(json) = payload else {
+                            unreachable!()
+                        };
+                        let reply: OfferReply =
+                            serde_json::from_value(json.first().unwrap().clone()).unwrap();
+                        let on_reply = Arc::clone(&on_reply);
+                        rt_handle_2.spawn(async move {
+                            on_reply(reply, socket).await;
+                        });
+                    },
+                )
+                .on("open", move |payload, socket| {
+                    let open_tx = open_tx.clone();
+                    rt_handle_3.spawn(async move {
+                        open_tx.send(()).await.unwrap();
                     });
-                },
-            )
-            .on(
-                "connections:reply",
-                move |payload: Payload, socket: RawClient| {
-                    let Payload::Text(json) = payload else {
-                        unreachable!()
-                    };
-                    let reply: OfferReply =
-                        serde_json::from_value(json.first().unwrap().clone()).unwrap();
-                    let on_reply = Arc::clone(&on_reply);
-                    rt_handle_2.spawn(async move {
-                        on_reply(reply, socket).await;
-                    });
-                },
-            )
-            .on("error", |err, _| eprintln!("Error: {:#?}", err))
-            .on("close", |_, socket: RawClient| println!("Disconnected"));
+                })
+                .on("error", |err, _| eprintln!("Error: {:#?}", err))
+                .on("close", |_, socket: RawClient| println!("Disconnected"));
 
-        let socket = builder.connect().expect("Connection failed");
+            let socket = builder.connect().expect("Connection failed");
 
-        println!("Connected to signaling server {host}");
+            socket
+        }
+    }).await.expect("spawn_blocking panicked");
 
-        socket
-    }).await.expect("spawn_blocking panicked")
+    open_rx.recv().await.unwrap();
+
+    println!("Connected to signaling server {host}");
+    
+    socket
 
     // TODO disconnect when app closes
     // TODO does it already automatically disconnect when app closes? check with signaling server by listening for disconnects and closing the app!

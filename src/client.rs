@@ -10,6 +10,7 @@ use rust_socketio::client::Client;
 use rust_socketio::{Payload, RawClient};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tokio::task;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -93,12 +94,12 @@ async fn send_offer(offer: OfferReply, socket: &Client) {
     }).await.unwrap();
 }
 
-async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, minecraft_stream: TcpStream, minecraft_client_addr: SocketAddr, reply_manager: Arc<ResponseManager<OfferReply>>) -> Result<()> {
+async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, minecraft_stream: TcpStream, _minecraft_client_addr: SocketAddr, reply_manager: Arc<ResponseManager<OfferReply>>) -> Result<()> {
     let peer_connection = create_peer_connection().await?;
 
-    let (mut minecraft_read, minecraft_write) = minecraft_stream.into_split();
+    let (minecraft_read, minecraft_write) = minecraft_stream.into_split();
     let mut minecraft_read = LogOnDrop::new(minecraft_read, "minecraft_read");
-    let mut minecraft_write = LogOnDrop::new(minecraft_write, "minecraft_write");
+    let minecraft_write = Arc::new(Mutex::new(LogOnDrop::new(minecraft_write, "minecraft_write")));
 
     let data_channel = peer_connection
         .create_data_channel(
@@ -116,53 +117,90 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
 
     // Log changes to connection state
     setup_peer_connection_state_change_listener(&peer_connection, done_tx);
+    
+    // Forward messages from Minecraft client to peer
+    data_channel.on_open({
+        let data_channel = Arc::clone(&data_channel);
+        let peer_connection = Arc::clone(&peer_connection);
+        Box::new(move || {
+            println!("Data channel '{}'-'{}' open", data_channel.label(), data_channel.id());
+            Box::pin(async move {
+                let mut buffer = BytesMut::with_capacity(8 * 1024); // 8KB initial buffer
 
-    // Register channel opening handling
-    let d1 = Arc::clone(&data_channel);
-    data_channel.on_open(Box::new(move || {
-        println!("Data channel '{}'-'{}' open", d1.label(), d1.id());
-        let d2 = Arc::clone(&d1);
-        // send_periodic_messages(d2)
-        Box::pin(async move {
-            let mut buffer = BytesMut::with_capacity(8 * 1024); // 8KB initial buffer
+                loop {
+                    buffer.reserve(1024);
+                    let bytes_read = minecraft_read.inner.read_buf(&mut buffer).await.unwrap();
 
-            // task::spawn(async move {
-            loop {
-                buffer.reserve(1024);
-                let bytes_read = minecraft_read.inner.read_buf(&mut buffer).await.unwrap();
+                    if bytes_read == 0 {
+                        // Connection was closed
+                        println!("Read 0 bytes from Minecraft client");
+                        break;
+                    }
 
-                if bytes_read == 0 {
-                    // Connection was closed
-                    println!("Read 0 bytes from Minecraft client");
-                    break;
+                    // Split off the filled portion and process it
+                    let chunk = buffer.split().freeze();
+                    print!("Sending {bytes_read} bytes from Minecraft client over p2p connection... ");
+                    match data_channel.send(&chunk).await {
+                        Ok(_) => println!("Sent"),
+                        Err(error) => {
+                            println!("Failed to send data from Minecraft client to peer: {error}");
+                            break;
+                        }
+                    }
                 }
-
-                // Split off the filled portion and process it
-                let chunk = buffer.split().freeze();
-                println!("Sending {bytes_read} bytes from Minecraft client over p2p connection");
-                d2.send(&chunk).await.unwrap();
-                println!("Sent data");
-            }
-            println!("Done handling data_channel.on_open, not sending any more data");
-            // }).await.unwrap()
+                print!("Done handling data_channel.on_open, not sending any more data. Closing connection to peer... ");
+                peer_connection.close().await.unwrap();
+                println!("Closed");
+            })
         })
-    }));
+    });
 
     // Register text message handling
-    let d_label = data_channel.label().to_owned();
-    let mut minecraft_write = Some(minecraft_write);
-    data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-        let len = msg.data.len();
-        println!("Received {len} bytes from peer");
-        let data_2 = msg.data.clone();
-        let mut minecraft_write = minecraft_write.take().unwrap();
-        Box::pin(async move {
-            minecraft_write.inner.write_all(&data_2).await.expect("Failed to write to Minecraft server");
-            println!("Forwarded data from peer to Minecraft");
+    data_channel.on_message({
+        let minecraft_write = minecraft_write.clone();
+        let peer_connection = peer_connection.clone();
+        Box::new(move |msg: DataChannelMessage| {
+            let minecraft_write = minecraft_write.clone();
+            let peer_connection = peer_connection.clone();
+            let len = msg.data.len();
+            print!("Received {len} bytes from peer, forwarding to Minecraft client... ");
+            Box::pin(async move {
+                match minecraft_write.lock().await.inner.write_all(&msg.data).await {
+                    Ok(_) => { println!("Forwarded")}
+                    Err(error) => {
+                        println!("Failed to write to Minecraft client: {error}");
+                        peer_connection.close().await.unwrap();
+                    }
+                }
+            })
         })
-    }));
+    });
+    
+    data_channel.on_close({
+        let minecraft_write = minecraft_write.clone();
+        Box::new(move || {
+            let minecraft_write = minecraft_write.clone();
+            Box::pin(async move {
+                print!("Data channel closed, shutting down Minecraft connection...");
+                minecraft_write.lock().await.inner.shutdown().await.unwrap();
+                println!("Shut down");
+            })
+        })
+    });
 
-    // Create an offer to send to the browser
+    data_channel.on_error({
+        let minecraft_write = minecraft_write.clone();
+        Box::new(move |error| {
+            let minecraft_write = minecraft_write.clone();
+            Box::pin(async move {
+                println!("Data channel got an error: {error}");
+                print!("Shutting down Minecraft connection...");
+                minecraft_write.lock().await.inner.shutdown().await.unwrap();
+                println!("Shut down");
+            })
+        })
+    });
+
     let offer = peer_connection.create_offer(None).await?;
 
     // Create channel that is blocked until ICE Gathering is complete
@@ -179,7 +217,6 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
     let offer_number = random::<u32>();
     let reply_receiver = reply_manager.wait_for_response(offer_number).await;
 
-    // Output the answer in base64 so we can paste it in browser
     if let Some(local_desc) = peer_connection.local_description().await {
         let json_str = serde_json::to_string(&local_desc)?;
         send_offer(OfferReply {
@@ -190,23 +227,20 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: &Client, mine
         }, socket).await;
         println!("Pushed offer: {json_str}");
     } else {
-        println!("generate local_description failed!");
+        println!("Generating local_description failed!");
     }
 
     let reply = reply_receiver.await.expect("Failed to receive response");
-    let desc_data = reply.description;
-    let answer = serde_json::from_str::<RTCSessionDescription>(&desc_data)?;
-
-    // Apply the answer as the remote description
+    let answer = serde_json::from_str::<RTCSessionDescription>(&reply.description)?;
     peer_connection.set_remote_description(answer).await?;
 
     println!("Waiting for done signal");
     done_rx.recv().await.unwrap();
     println!("Received done signal");
 
-    println!("Closing peer connection");
+    println!("Closing peer connection and Minecraft connection");
     peer_connection.close().await?;
-    // TODO close Minecraft connection?
+    minecraft_write.lock().await.inner.shutdown().await.unwrap();
 
     Ok(())
 }
