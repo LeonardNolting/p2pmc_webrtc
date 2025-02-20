@@ -6,8 +6,6 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use futures::stream::SplitSink;
-use rust_socketio::{ClientBuilder, Payload, RawClient};
-use rust_socketio::client::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -19,14 +17,14 @@ use webrtc::data_channel::OnCloseHdlrFn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OfferReply {
-    pub r#type: String,
-    pub id: String,
-    pub to: String,
-    pub number: u32,
-    pub description: String,
+    pub(crate) r#type: String,
+    pub(crate) id: String,
+    pub(crate) to: String,
+    pub(crate) number: u32,
+    pub(crate) description: String,
 }
 
-pub type SocketTx = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
+pub(crate) type SocketTx = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
 
 // async fn connect_to_signaling_server<Fut: Future, F: (Fn(OfferReply, RawClient) -> Fut) + Send + 'static>(
 pub(crate) async fn connect_to_signaling_server<OfferHandler, OfferHandlerFuture, ReplyHandler, ReplyHandlerFuture, DisconnectHandler, DisconnectHandlerFuture>(

@@ -2,6 +2,13 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::general::{connect_to_signaling_server, register, OfferReply, SocketTx};
+use crate::log_on_drop::LogOnDrop;
+use crate::p2p_helper::{
+    create_peer_connection, setup_peer_connection_state_change_listener,
+};
+use crate::parse_server::parse_server;
+use crate::reply_manager::ResponseManager;
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::SinkExt;
@@ -13,65 +20,61 @@ use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use url::Url;
-use crate::general::{connect_to_signaling_server, OfferReply, register, SocketTx};
-use crate::parse_server::{get_server_address, parse_server};
-use crate::log_on_drop::LogOnDrop;
-use crate::p2p_helper::{
-    create_peer_connection, setup_peer_connection_state_change_listener,
-};
-use crate::reply_manager::ResponseManager;
 
-pub async fn start_client_proxy(host: &str, id: &str) {
+pub async fn start_client_proxy(host: &str, id: &str, port: u16) {
     println!("Starting client proxy");
-
-    let response_manager = ResponseManager::new();
-
-    let signaling_tx = connect_to_signaling_server(
-        host,
-        move |_, _| { async {} },
-        {
-            let response_manager = response_manager.clone();
-            move |reply: OfferReply, _| {
-                let response_manager = response_manager.clone();
-                async move {
-                    response_manager.handle_response(reply.number, reply).await;
-                }
-            }
-        },
-        move || {
-            async move {}
-        },
-    ).await;
-
-    register(id, signaling_tx.clone()).await;
-
     let id = id.to_owned();
-    let signaling_tx = signaling_tx.clone();
+    let host = host.to_owned();
 
-    println!("Starting Minecraft adapter");
-    listen_for_minecraft_client_connections("0.0.0.0:25565", {
-        let id = id.clone();
+    // tokio::spawn(async move {
+        let response_manager = ResponseManager::new();
+
+        let signaling_tx = connect_to_signaling_server(
+            &host,
+            move |_, _| { async {} },
+            {
+                let response_manager = response_manager.clone();
+                move |reply: OfferReply, _| {
+                    let response_manager = response_manager.clone();
+                    async move {
+                        response_manager.handle_response(reply.number, reply).await;
+                    }
+                }
+            },
+            move || {
+                async move {}
+            },
+        ).await;
+
+        register(&id, signaling_tx.clone()).await;
+
+        let id = id.to_owned();
         let signaling_tx = signaling_tx.clone();
-        let response_manager = response_manager.clone();
-        move |mut stream, addr| {
-            println!("New connection to Minecraft client adapter");
+
+        println!("Starting Minecraft adapter");
+        listen_for_minecraft_client_connections(format!("0.0.0.0:{port}").as_str(), {
             let id = id.clone();
             let signaling_tx = signaling_tx.clone();
             let response_manager = response_manager.clone();
-            async move {
-                tokio::spawn(async move {
-                    // TODO any of the parsing fails, close all connections - need to retry
-                    let to_id = parse_server(&mut stream).await.unwrap();
-                    connect_to_peer_as_dialer(id.parse().unwrap(), to_id, signaling_tx, stream, addr, response_manager).await.unwrap();
-                }).await.unwrap();
+            move |mut stream, addr| {
+                println!("New connection to Minecraft client adapter");
+                let id = id.clone();
+                let signaling_tx = signaling_tx.clone();
+                let response_manager = response_manager.clone();
+                async move {
+                    tokio::spawn(async move {
+                        // TODO any of the parsing fails, close all connections - need to retry
+                        let to_id = parse_server(&mut stream).await.unwrap();
+                        connect_to_peer_as_dialer(id.parse().unwrap(), to_id, signaling_tx, stream, addr, response_manager).await.unwrap();
+                    }).await.unwrap();
+                }
             }
-        }
-    }).await;
+        }).await;
 
-    print!("Minecraft adapter closed. Closing signaling connection... ");
-    signaling_tx.clone().lock().await.close().await.unwrap();
-    println!("Closed");
+        print!("Minecraft adapter closed. Closing signaling connection... ");
+        signaling_tx.clone().lock().await.close().await.unwrap();
+        println!("Closed");
+    // }).await.unwrap();
 }
 
 async fn listen_for_minecraft_client_connections<Fut: Future, F: (Fn(TcpStream, SocketAddr) -> Fut) + Send + 'static>(url: &str, on_connect: F) {
@@ -179,7 +182,7 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: SocketTx, min
             let minecraft_write = minecraft_write.clone();
             Box::pin(async move {
                 print!("Data channel closed, shutting down Minecraft connection...");
-                minecraft_write.lock().await.inner.shutdown().await.unwrap();
+                minecraft_write.lock().await.inner.shutdown().await.unwrap(); // TODO kein .unwrap(), Fehler: called `Result::unwrap()` on an `Err` value: Os { code: 10054, kind: ConnectionReset, message: "Eine vorhandene Verbindung wurde vom Remotehost geschlossen." }
                 println!("Shut down");
             })
         })
@@ -238,7 +241,10 @@ async fn connect_to_peer_as_dialer(id: String, to: String, socket: SocketTx, min
 
     println!("Closing peer connection and Minecraft connection");
     peer_connection.close().await?;
-    minecraft_write.lock().await.inner.shutdown().await.unwrap();
+    minecraft_write.lock().await.inner.shutdown().await.unwrap(); // TODO no unwrap
+    // Closing peer connection and Minecraft connection
+    // thread 'tokio-runtime-worker' panicked at src\client.rs:244:57:
+    // called `Result::unwrap()` on an `Err` value: Os { code: 10054, kind: ConnectionReset, message: "Eine vorhandene Verbindung wurde vom Remotehost geschlossen." }
 
     Ok(())
 }

@@ -3,7 +3,7 @@ use std::io::Result;
 use tokio::net::TcpStream;
 use url::Url;
 
-pub async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
+pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
     let server_address = get_server_address(stream).await?;
     let domain = Url::parse(&server_address).map_or_else(|error| {
         server_address
@@ -13,7 +13,7 @@ pub async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
     });
     let mut domains: Vec<&str> = domain.split(".").collect();
     domains.reverse();
-    if domains.len() != 3 ||  domains[0] != "me" || domains[1] != "localtest" {
+    if domains.len() != 3 ||  domains[0] != "dev" || domains[1] != "cose" {
         // TODO is panic correct here?
         panic!("Couldn't read subdomain from URL, domains: {:?}", domains);
     }
@@ -22,7 +22,7 @@ pub async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
     Ok(to_id)
 }
 
-pub async fn get_server_address(stream: &mut TcpStream) -> Result<String> {
+pub(crate) async fn get_server_address(stream: &mut TcpStream) -> Result<String> {
     // Create a buffer large enough for the initial handshake packet
     // TODO let length depend on size of first packet
     let mut peek_buf = vec![0u8; 1024];
@@ -31,6 +31,7 @@ pub async fn get_server_address(stream: &mut TcpStream) -> Result<String> {
     let bytes_read = stream.peek(&mut peek_buf).await?;
 
     if bytes_read == 0 {
+        // TODO handle properly .. after leaving?
         return Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "Connection closed before receiving handshake"

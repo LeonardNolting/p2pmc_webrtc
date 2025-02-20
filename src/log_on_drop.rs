@@ -1,11 +1,11 @@
 #[derive(Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Clone)]
-pub struct LogOnDrop<T> {
-    pub inner: T,
-    pub description: &'static str,
+pub(crate) struct LogOnDrop<T> {
+    pub(crate) inner: T,
+    pub(crate) description: &'static str,
 }
 
 impl <T> LogOnDrop<T> {
-    pub fn new(inner: T, description: &'static str) -> LogOnDrop<T> {
+    pub(crate) fn new(inner: T, description: &'static str) -> LogOnDrop<T> {
         LogOnDrop { inner, description }
     }
 }

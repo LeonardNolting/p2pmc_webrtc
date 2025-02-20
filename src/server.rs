@@ -8,6 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
+use tokio_util::sync::CancellationToken;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -19,35 +20,44 @@ use crate::p2p_helper::{
 
 pub async fn start_server_proxy(host: &str, id: &str, port: u16) {
     println!("Starting server proxy");
+    let id = id.to_owned();
+    let host = host.to_owned();
 
-    let signaling_tx = connect_to_signaling_server(
-        host,
-        move |offer: OfferReply, signaling_tx| {
-            async move {
-                connect_to_peer_as_listener(offer.clone().description, move |description| {
-                    let offer = offer.clone();
-                    let signaling_tx = signaling_tx.clone();
-                    async move {
-                        send_reply_to_offer(offer, &description, signaling_tx).await;
-                    }
-                }, port)
-                    .await
-                    .unwrap();
+    /*let cancel_token = CancellationToken::new();
+
+    let server_token = cancel_token.clone();*/
+
+    
+    // tokio::spawn(async move {
+        let signaling_tx = connect_to_signaling_server(
+            &host,
+            move |offer: OfferReply, signaling_tx| {
+                async move {
+                    tokio::spawn(async move {
+                        connect_to_peer_as_listener(offer.clone().description, move |description| {
+                            let offer = offer.clone();
+                            let signaling_tx = signaling_tx.clone();
+                            async move {
+                                send_reply_to_offer(offer, &description, signaling_tx).await;
+                            }
+                        }, port)
+                            .await
+                            .unwrap();
+                    });
+                }
+            },
+            move |_, _| { async move {} },
+            move || {
+                async move {}
             }
-        },
-        move |_, _| { async move {} },
-        move || {
-            async move {
-                
-            }
-        }
-    ).await;
+        ).await;
 
-    register(id, signaling_tx).await;
+        register(&id, signaling_tx).await;
 
-    loop {}
-
-    // socket
+        loop {}
+    // }).await.unwrap();
+    
+    // cancel_token;
 }
 
 async fn send_reply_to_offer(offer: OfferReply, description: &str, signaling_tx: SocketTx) {
@@ -216,7 +226,7 @@ where
 
     println!("Closing peer connection and Minecraft connection");
     peer_connection.close().await?;
-    minecraft_write.lock().await.shutdown().await.unwrap();
+    minecraft_write.lock().await.shutdown().await?;
 
     Ok(())
 }

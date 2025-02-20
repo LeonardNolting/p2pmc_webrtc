@@ -18,7 +18,8 @@ async fn main() {
     let id = std::env::args().nth(2).expect("Provide an ID");
 
     if is_client {
-        start_client_proxy(SIGNALING_SERVER, id.as_str()).await;
+        let port = std::env::args().nth(3).unwrap_or("25565".to_string()).parse::<u16>().expect("Port must be a number");
+        start_client_proxy(SIGNALING_SERVER, id.as_str(), port).await;
     } else {
         let port = std::env::args().nth(3).expect("Provide a port on which a Minecraft server runs").parse::<u16>().expect("Port must be a number");
         start_server_proxy(SIGNALING_SERVER, id.as_str(), port).await;
