@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use futures::SinkExt;
+use rcgen::CertifiedKey;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -18,7 +19,7 @@ use crate::p2p_helper::{
     create_peer_connection, setup_peer_connection_state_change_listener,
 };
 
-pub async fn start_server_proxy(host: &str, id: &str, port: u16) {
+pub async fn start_server_proxy(host: &str, id: &str, port: u16, certified_key: Arc<CertifiedKey>) {
     println!("Starting server proxy");
     let id = id.to_owned();
     let host = host.to_owned();
@@ -32,6 +33,7 @@ pub async fn start_server_proxy(host: &str, id: &str, port: u16) {
         let signaling_tx = connect_to_signaling_server(
             &host,
             move |offer: OfferReply, signaling_tx| {
+                let certified_key = certified_key.clone();
                 async move {
                     tokio::spawn(async move {
                         connect_to_peer_as_listener(offer.clone().description, move |description| {
@@ -40,7 +42,7 @@ pub async fn start_server_proxy(host: &str, id: &str, port: u16) {
                             async move {
                                 send_reply_to_offer(offer, &description, signaling_tx).await;
                             }
-                        }, port)
+                        }, port, certified_key)
                             .await
                             .unwrap();
                     });
@@ -72,12 +74,14 @@ async fn send_reply_to_offer(offer: OfferReply, description: &str, signaling_tx:
     println!("Sent reply");
 }
 
-async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F, port: u16) -> Result<()>
+async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F, port: u16, certified_key: Arc<CertifiedKey>) -> Result<()>
 where
     F: Fn(String) -> Fut + Send + Sync + 'static,
     Fut: Future<Output=()> + Send + 'static,
 {
-    let peer_connection = create_peer_connection().await?;
+    let peer_connection = create_peer_connection(certified_key).await?;
+
+    let test = peer_connection.sctp().transport().get_remote_certificate().await;
 
     let minecraft_connection = connect_to_local_server(format!("127.0.0.1:{port}").as_str()).await;
     let (minecraft_read, minecraft_write) = minecraft_connection.into_split();

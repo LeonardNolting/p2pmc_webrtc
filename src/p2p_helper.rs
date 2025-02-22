@@ -2,16 +2,19 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use rcgen::CertifiedKey;
 use tokio::sync::mpsc::Sender;
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::data_channel::RTCDataChannel;
+use webrtc::dtls::crypto::{Certificate, CryptoPrivateKey};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::{math_rand_alpha, RTCPeerConnection};
+use webrtc::peer_connection::certificate::RTCCertificate;
 
 /// Set the handler for Peer connection state
 /// This will notify you when the peer has connected/disconnected
@@ -36,7 +39,7 @@ pub(crate) fn setup_peer_connection_state_change_listener(peer_connection: &Arc<
     }));
 }
 
-pub(crate) async fn create_peer_connection() -> anyhow::Result<Arc<RTCPeerConnection>> {
+pub(crate) async fn create_peer_connection(certified_key: Arc<CertifiedKey>) -> anyhow::Result<Arc<RTCPeerConnection>> {
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
 
@@ -64,11 +67,20 @@ pub(crate) async fn create_peer_connection() -> anyhow::Result<Arc<RTCPeerConnec
             urls: vec!["stun:stun.l.google.com:19302".to_owned()],
             ..Default::default()
         }],
+        certificates: vec![
+            RTCCertificate::from_existing(Certificate {
+                certificate: vec![certified_key.cert.der().to_owned()],
+                private_key: CryptoPrivateKey::try_from(&certified_key.key_pair)?,
+            }, certified_key.cert.params().not_after.into())
+        ],
         ..Default::default()
     };
 
     // Create a new RTCPeerConnection
     let peer_connection = Arc::new(api.new_peer_connection(config).await?);
+    
+    // peer_connection.dtls_transport().get_remote_certificate();
+    // peer_connection.set_identity_provider()
     Ok(peer_connection)
 }
 
