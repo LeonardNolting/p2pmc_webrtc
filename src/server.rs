@@ -12,6 +12,7 @@ use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use tokio_util::sync::CancellationToken;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
+use webrtc::peer_connection::certificate::RTCCertificate;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 use crate::general::{connect_to_signaling_server, OfferReply, register, SocketTx};
@@ -19,7 +20,7 @@ use crate::p2p_helper::{
     create_peer_connection, setup_peer_connection_state_change_listener,
 };
 
-pub async fn start_server_proxy(host: &str, id: &str, port: u16, certified_key: Arc<CertifiedKey>) {
+pub async fn start_server_proxy(host: &str, id: &str, port: u16, certificate: RTCCertificate) {
     println!("Starting server proxy");
     let id = id.to_owned();
     let host = host.to_owned();
@@ -33,7 +34,7 @@ pub async fn start_server_proxy(host: &str, id: &str, port: u16, certified_key: 
         let signaling_tx = connect_to_signaling_server(
             &host,
             move |offer: OfferReply, signaling_tx| {
-                let certified_key = certified_key.clone();
+                let certificate = certificate.clone();
                 async move {
                     tokio::spawn(async move {
                         connect_to_peer_as_listener(offer.clone().description, move |description| {
@@ -42,7 +43,7 @@ pub async fn start_server_proxy(host: &str, id: &str, port: u16, certified_key: 
                             async move {
                                 send_reply_to_offer(offer, &description, signaling_tx).await;
                             }
-                        }, port, certified_key)
+                        }, port, certificate)
                             .await
                             .unwrap();
                     });
@@ -74,12 +75,12 @@ async fn send_reply_to_offer(offer: OfferReply, description: &str, signaling_tx:
     println!("Sent reply");
 }
 
-async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F, port: u16, certified_key: Arc<CertifiedKey>) -> Result<()>
+async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F, port: u16, certificate: RTCCertificate) -> Result<()>
 where
     F: Fn(String) -> Fut + Send + Sync + 'static,
     Fut: Future<Output=()> + Send + 'static,
 {
-    let peer_connection = create_peer_connection(certified_key).await?;
+    let peer_connection = create_peer_connection(certificate).await?;
 
     let test = peer_connection.sctp().transport().get_remote_certificate().await;
 

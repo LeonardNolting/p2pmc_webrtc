@@ -13,11 +13,11 @@ pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<Strin
     });
     let mut domains: Vec<&str> = domain.split(".").collect();
     domains.reverse();
-    if domains.len() != 3 ||  domains[0] != "dev" || domains[1] != "cose" {
+    /* if domains.len() != 3 ||  domains[0] != "localhost" || domains[1] != "p2pmc" {
         // TODO is panic correct here?
         panic!("Couldn't read subdomain from URL, domains: {:?}", domains);
-    }
-    let to_id = domains[2].to_string();
+    } */
+    let to_id = domains.last().unwrap().to_string();
     println!("Parsed peer: {to_id}");
     Ok(to_id)
 }

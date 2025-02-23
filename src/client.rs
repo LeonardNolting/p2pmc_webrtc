@@ -11,16 +11,25 @@ use anyhow::Result;
 use bytes::BytesMut;
 use futures::SinkExt;
 use rand::random;
-use rcgen::CertifiedKey;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
+use webpki::types::CertificateDer;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::peer_connection::certificate::RTCCertificate;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use x509_parser::nom::AsBytes;
+use crate::validate_is_peer;
 
-pub async fn start_client_proxy(host: &str, id: &str, port: u16, certified_key: Arc<CertifiedKey>) {
+pub async fn start_client_proxy(
+    host: &str,
+    id: &str,
+    port: u16,
+    certificate: RTCCertificate,
+    root_certificate: Vec<u8>,
+) {
     println!("Starting client proxy");
     let id = id.to_owned();
     let host = host.to_owned();
@@ -49,7 +58,7 @@ pub async fn start_client_proxy(host: &str, id: &str, port: u16, certified_key: 
     let id = id.to_owned();
 
     println!("Starting Minecraft adapter");
-    listen_for_minecraft_client_connections(format!("0.0.0.0:{port}").as_str(), {
+    listen_for_minecraft_client_connections(format!("127.0.0.2:{port}").as_str(), {
         /*let id = id.clone();
         let signaling_tx = signaling_tx.clone();
         let response_manager = response_manager.clone();*/
@@ -59,7 +68,8 @@ pub async fn start_client_proxy(host: &str, id: &str, port: u16, certified_key: 
             let id = id.clone();
             let signaling_tx = signaling_tx.clone();
             let response_manager = response_manager.clone();
-            let certified_key = certified_key.clone();
+            let certificate = certificate.clone();
+            let root_certificate = root_certificate.clone();
             async move {
                 tokio::spawn(async move {
                     // TODO any of the parsing fails, close all connections - need to retry
@@ -71,7 +81,8 @@ pub async fn start_client_proxy(host: &str, id: &str, port: u16, certified_key: 
                         stream,
                         addr,
                         response_manager,
-                        certified_key,
+                        certificate,
+                        root_certificate,
                     )
                     .await
                     .unwrap();
@@ -128,9 +139,14 @@ async fn connect_to_peer_as_dialer(
     minecraft_stream: TcpStream,
     _minecraft_client_addr: SocketAddr,
     reply_manager: Arc<ResponseManager<OfferReply>>,
-    certified_key: Arc<CertifiedKey>,
+    certificate: RTCCertificate,
+    root_certificate: Vec<u8>,
 ) -> Result<()> {
-    let peer_connection = create_peer_connection(certified_key).await?;
+    let peer_connection = create_peer_connection(certificate).await?;
+
+    let server_certificate = &CertificateDer::from(peer_connection.dtls_transport().get_remote_certificate().await.to_vec());
+    // TODO throws error
+    // validate_is_peer(to.clone(), server_certificate, &CertificateDer::from(root_certificate)).await?;
 
     let (minecraft_read, minecraft_write) = minecraft_stream.into_split();
     let mut minecraft_read = LogOnDrop::new(minecraft_read, "minecraft_read");
