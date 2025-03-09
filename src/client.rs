@@ -58,7 +58,7 @@ pub async fn start_client_proxy(
     let id = id.to_owned();
 
     println!("Starting Minecraft adapter");
-    listen_for_minecraft_client_connections(format!("127.0.0.2:{port}").as_str(), {
+    listen_for_minecraft_client_connections(format!("127.0.0.1:{port}").as_str(), {
         /*let id = id.clone();
         let signaling_tx = signaling_tx.clone();
         let response_manager = response_manager.clone();*/
