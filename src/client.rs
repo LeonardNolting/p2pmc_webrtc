@@ -107,6 +107,7 @@ async fn listen_for_minecraft_client_connections<
     url: &str,
     on_connect: F,
 ) {
+    println!("Starting Minecraft client adapter under {url}");
     let listener = TcpListener::bind(url).await.unwrap();
     println!("Listening for TCP connections from Minecraft clients under {url}");
     loop {
