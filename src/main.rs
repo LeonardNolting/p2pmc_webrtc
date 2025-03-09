@@ -1,4 +1,4 @@
-#![feature(duration_constructors)]
+// #![feature(duration_constructors)]
 
 use crate::client::start_client_proxy;
 use crate::server::start_server_proxy;
@@ -66,7 +66,7 @@ async fn parse_cert(cert: &[u8]) -> Result<Identity> {
     let age_public_key = cert.extensions().iter().find(|ext| {
         ext.oid == "2.25.10".parse().unwrap()
     }).unwrap().value;
-    let age_public_key = str::from_utf8(age_public_key)?;
+    let age_public_key = std::str::from_utf8(age_public_key)?;
 
     println!("Parsed age public key: {}", age_public_key);
 
@@ -179,7 +179,7 @@ async fn create_root_certificate(age_public_key: Recipient) -> Result<CertifiedK
         ));
 
     params.not_before = OffsetDateTime::now_utc();
-    params.not_after = params.not_before + Duration::from_days(365 * 1000);
+    params.not_after = params.not_before + Duration::from_secs(365 * 1000 * 24 * 60 * 60);
 
     params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
@@ -247,7 +247,7 @@ async fn create_user_certificate(
         ));
 
     params.not_before = OffsetDateTime::now_utc();
-    params.not_after = params.not_before + Duration::from_days(365 * 100);
+    params.not_after = params.not_before + Duration::from_secs(365 * 100 * 24 * 60 * 60);
 
     params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
