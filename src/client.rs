@@ -21,7 +21,7 @@ use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::peer_connection::certificate::RTCCertificate;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use x509_parser::nom::AsBytes;
-use crate::validate_is_peer;
+use crate::crypto::validate_is_peer;
 
 pub async fn start_client_proxy(
     host: &str,
