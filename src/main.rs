@@ -20,12 +20,6 @@ mod crypto; // Add this line
 // pub const SIGNALING_SERVER: &str = "http://34.75.203.169:5100";
 pub const SIGNALING_SERVER: &str = "ws://127.0.0.1:5100";
 
-fn get_certificate_expiry(cert: &CertificateDer<'static>) -> Result<SystemTime> {
-    let (_, parsed_cert) = X509Certificate::from_der(cert).ok().unwrap();
-    let validity = parsed_cert.validity();
-    Ok(SystemTime::from(validity.not_after.to_datetime()))
-}
-
 #[tokio::main]
 async fn main() {
     // let (root_certified_key, root_age_key) = crypto::create_root().await.unwrap();
