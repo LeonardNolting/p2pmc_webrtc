@@ -100,39 +100,6 @@ pub async fn start_client_proxy(
     // }).await.unwrap();
 }
 
-async fn listen_for_minecraft_client_connections<
-    Fut: Future,
-    F: (Fn(TcpStream, SocketAddr) -> Fut) + Send + 'static,
->(
-    url: &str,
-    on_connect: F,
-) {
-    println!("Starting Minecraft client adapter under {url}");
-    let listener = TcpListener::bind(url).await.unwrap();
-    println!("Listening for TCP connections from Minecraft clients under {url}");
-    loop {
-        let (stream, address) = listener
-            .accept()
-            .await
-            .expect(&format!("Couldn't connect to Minecraft client under {url}"));
-        stream.set_nodelay(true).unwrap();
-
-        on_connect(stream, address).await;
-    }
-}
-
-async fn send_offer(offer: OfferReply, signaling_tx: SocketTx) {
-    signaling_tx
-        .lock()
-        .await
-        .send(Message::Text(Utf8Bytes::from(
-            serde_json::to_string(&offer).unwrap(),
-        )))
-        .await
-        .expect("Couldn't send offer");
-    println!("Sent offer");
-}
-
 async fn connect_to_peer_as_dialer(
     id: String,
     to: String,

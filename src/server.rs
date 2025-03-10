@@ -63,18 +63,6 @@ pub async fn start_server_proxy(host: &str, id: &str, port: u16, certificate: RT
     // cancel_token;
 }
 
-async fn send_reply_to_offer(offer: OfferReply, description: &str, signaling_tx: SocketTx) {
-    let reply = OfferReply {
-        r#type: "reply".to_string(),
-        id: offer.to,
-        to: offer.id,
-        number: offer.number,
-        description: description.to_string(),
-    };
-    signaling_tx.lock().await.send(Message::Text(Utf8Bytes::from(serde_json::to_string(&reply).unwrap()))).await.expect("Couldn't send reply");
-    println!("Sent reply");
-}
-
 async fn connect_to_peer_as_listener<F, Fut>(offer: String, push_reply: F, port: u16, certificate: RTCCertificate) -> Result<()>
 where
     F: Fn(String) -> Fut + Send + Sync + 'static,
@@ -234,14 +222,4 @@ where
     minecraft_write.lock().await.shutdown().await?;
 
     Ok(())
-}
-
-async fn connect_to_local_server(url: &str) -> TcpStream {
-    // set up a connection to the Minecraft server
-    println!("Connecting to Minecraft server at {url}");
-    let stream = TcpStream::connect(url)
-        .await
-        .expect(&format!("Couldn't connect to Minecraft server under {url}"));
-    stream.set_nodelay(true).unwrap();
-    stream
 }

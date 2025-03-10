@@ -24,3 +24,5 @@ time = "0.3.37"
 age = "0.11.1"
 rustls-webpki = "0.102.8"
 x509-parser = { version = "0.17.0", features = ["verify"] }
+# CLI
+clap = { version = "*", features = ["derive"] }

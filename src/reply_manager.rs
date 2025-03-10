@@ -8,10 +8,10 @@ pub(crate) struct ResponseManager<T> {
 }
 
 impl<T> ResponseManager<T> {
-    pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Self {
+    pub(crate) fn new() -> Self {
+        Self {
             pending_requests: Mutex::new(HashMap::new())
-        })
+        }
     }
 
     // Register a new request and get a receiver to await the response
