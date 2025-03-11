@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use reply_manager::ResponseManager;
 use serde_json::json;
@@ -104,18 +105,25 @@ async fn handle_server_offer(
     minecraft_server: &str,
 ) -> Result<()> {
     let peer_connection = create_peer_connection(certificate.clone()).await?;
+    let (detached_sender, detached_receiver) = tokio::sync::oneshot::channel();
 
-    let (data_channel_sender, data_channel_receiver) = tokio::sync::oneshot::channel();
-    let pc_clone = peer_connection.clone();
-    let data_channel_sender = Arc::new(Mutex::new(Some(data_channel_sender)));
-    peer_connection.on_data_channel(Box::new(move |data_channel: Arc<RTCDataChannel>| {
-        let pc = pc_clone.clone();
-        let sender = data_channel_sender.clone();
-        Box::pin(async move {
-            if let Some(s) = sender.lock().await.take() {
-                let _ = s.send(data_channel);
-            }
-        })
+    peer_connection.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
+        let d_clone = d.clone();
+        let sender = detached_sender; // Move the sender into the outer closure
+        
+        d_clone.on_open(Box::new(move || {
+            let d_clone2 = d_clone.clone();
+            Box::pin(async move {
+                match d_clone2.detach().await {
+                    Ok(raw) => {
+                        let _ = sender.send(raw); // Use the moved sender
+                    },
+                    Err(e) => eprintln!("Failed to detach server data channel: {}", e),
+                }
+            })
+        }));
+
+        Box::pin(async {})
     }));
 
     let offer_sdp = serde_json::from_str::<RTCSessionDescription>(&offer.description)?;
@@ -135,13 +143,13 @@ async fn handle_server_offer(
 
     send_reply_to_offer(offer, &json_str, signaling_tx).await;
 
-    let data_channel = data_channel_receiver.await?;
-
+    let detached_data_channel = detached_receiver.await?;
     let minecraft_stream = connect_to_local_server(minecraft_server).await;
-    proxy_data(data_channel, minecraft_stream).await?;
 
+    proxy_traffic(detached_data_channel, minecraft_stream).await?;
     Ok(())
 }
+
 
 async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
     let certificate = generate_certificate().await?;
@@ -194,6 +202,7 @@ async fn handle_client_connection(
     reply_manager: Arc<ResponseManager<OfferReply>>,
 ) -> Result<()> {
     let peer_connection = create_peer_connection(certificate.clone()).await?;
+    let (detached_sender, detached_receiver) = tokio::sync::oneshot::channel();
 
     let data_channel = peer_connection
         .create_data_channel(
@@ -204,6 +213,20 @@ async fn handle_client_connection(
             }),
         )
         .await?;
+
+    // Clone the Arc before moving into the closure
+    let data_channel_clone = Arc::clone(&data_channel);
+    data_channel.on_open(Box::new(move || {
+        let sender = detached_sender; // Move the sender into the closure
+        Box::pin(async move {
+            match data_channel_clone.detach().await {
+                Ok(raw) => {
+                    let _ = sender.send(raw);
+                },
+                Err(e) => eprintln!("Failed to detach client data channel: {}", e),
+            }
+        })
+    }));
 
     let offer = peer_connection.create_offer(None).await?;
     peer_connection.set_local_description(offer).await?;
@@ -235,7 +258,60 @@ async fn handle_client_connection(
     let answer = serde_json::from_str::<RTCSessionDescription>(&reply.description)?;
     peer_connection.set_remote_description(answer).await?;
 
-    proxy_client_data(data_channel, minecraft_stream).await?;
+    let detached_data_channel = detached_receiver.await?;
+    proxy_traffic(detached_data_channel, minecraft_stream).await?;
+
+    Ok(())
+}
+
+async fn proxy_traffic(
+    data_channel: Arc<webrtc::data::data_channel::DataChannel>,
+    tcp_stream: TcpStream,
+) -> Result<()> {
+    let (mut tcp_read, mut tcp_write) = tokio::io::split(tcp_stream);
+    let data_channel_clone = data_channel.clone();
+
+    let read_task = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match data_channel_clone.read(&mut buf).await {
+                Ok(n) => {
+                    if let Err(e) = tcp_write.write_all(&buf[..n]).await {
+                        eprintln!("TCP write error: {}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Data channel read error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    let write_task = tokio::spawn(async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            match tcp_read.read(&mut buf).await {
+                Ok(n) if n == 0 => break,
+                Ok(n) => {
+                    if let Err(e) = data_channel.write(&Bytes::copy_from_slice(&buf[..n])).await {
+                        eprintln!("Data channel write error: {}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("TCP read error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = read_task => {},
+        _ = write_task => {},
+    }
 
     Ok(())
 }
@@ -351,9 +427,14 @@ async fn create_peer_connection(certificate: RTCCertificate) -> Result<Arc<RTCPe
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut m)?;
 
+    // Enable detached data channels
+    let mut setting_engine = SettingEngine::default();
+    setting_engine.detach_data_channels();
+
     let api = APIBuilder::new()
         .with_media_engine(m)
         .with_interceptor_registry(registry)
+        .with_setting_engine(setting_engine)
         .build();
 
     let config = RTCConfiguration {
