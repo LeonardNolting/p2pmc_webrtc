@@ -9,6 +9,7 @@ use tokio::{
     net::TcpStream,
     sync::Mutex,
 };
+use tokio_stream::StreamExt;
 use webrtc::{
     api::{
         interceptor_registry::register_default_interceptors,
@@ -70,29 +71,35 @@ async fn main() -> Result<()> {
 async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str) -> Result<()> {
     let certificate = generate_certificate().await?;
 
-    let signaling_tx = connect_to_signaling_server(
-        signaling_host,
-        {
-            let minecraft_server = minecraft_server.to_string();
-            move |offer, tx| {
-                let minecraft_server = minecraft_server.clone();
-                let certificate = certificate.clone();
-                async move {
-                    if let Err(e) = handle_server_offer(offer, tx, &certificate, &minecraft_server).await {
-                        eprintln!("Error handling server offer: {}", e);
-                    }
-                }
-            }
-        },
-        |reply, _| async move {
-            eprintln!("Unexpected reply received: {:?}", reply);
-        },
-        || async {
-            eprintln!("Disconnected from signaling server");
-        },
-    ).await;
+    let (signaling_tx, mut offer_reply_stream) = connect_to_signaling_server(signaling_host)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to signaling server: {}", e))?;
 
     register(id, signaling_tx.clone()).await;
+
+    let certificate_clone = certificate.clone();
+    let minecraft_server_clone = minecraft_server.to_string();
+    let signaling_tx_clone = signaling_tx.clone();
+
+    tokio::spawn(async move {
+        while let Some(offer_reply) = offer_reply_stream.next().await {
+            if offer_reply.r#type == "offer" {
+                if let Err(e) = handle_server_offer(
+                    offer_reply,
+                    signaling_tx_clone.clone(),
+                    &certificate_clone,
+                    &minecraft_server_clone,
+                )
+                .await
+                {
+                    eprintln!("Error handling server offer: {}", e);
+                }
+            } else {
+                eprintln!("Unexpected message type: {}", offer_reply.r#type);
+            }
+        }
+        eprintln!("Disconnected from signaling server");
+    });
 
     tokio::signal::ctrl_c().await?;
     Ok(())
@@ -162,26 +169,23 @@ async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
     let certificate = generate_certificate().await?;
     let reply_manager = Arc::new(ResponseManager::new());
 
-    let signaling_tx = connect_to_signaling_server(
-        signaling_host,
-        |offer, _| async move {
-            eprintln!("Unexpected offer received: {:?}", offer);
-        },
-        {
-            let reply_manager = reply_manager.clone();
-            move |reply, _| {
-                let reply_manager = reply_manager.clone();
-                async move {
-                    reply_manager.handle_response(reply.number, reply).await;
-                }
-            }
-        },
-        || async {
-            eprintln!("Disconnected from signaling server");
-        },
-    ).await;
+    let (signaling_tx, mut offer_reply_stream) = connect_to_signaling_server(signaling_host)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to signaling server: {}", e))?;
 
     register(id, signaling_tx.clone()).await;
+
+    let reply_manager_clone = reply_manager.clone();
+    tokio::spawn(async move {
+        while let Some(offer_reply) = offer_reply_stream.next().await {
+            if offer_reply.r#type == "reply" {
+                reply_manager_clone.handle_response(offer_reply.number, offer_reply).await;
+            } else {
+                eprintln!("Unexpected message type: {}", offer_reply.r#type);
+            }
+        }
+        eprintln!("Disconnected from signaling server");
+    });
 
     listen_for_minecraft_client_connections("127.0.0.1:25565", {
         let signaling_tx = signaling_tx.clone();

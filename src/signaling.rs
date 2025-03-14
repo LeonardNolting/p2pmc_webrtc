@@ -1,19 +1,16 @@
-use std::future::Future;
-use std::ops::Deref;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
-use futures::{SinkExt, StreamExt};
+use anyhow::Result;
 use futures::stream::SplitSink;
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
-use tokio::task;
+use tokio::sync::{Mutex, mpsc};
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use tokio_tungstenite::tungstenite::{Error, Message, Utf8Bytes};
-use webrtc::data_channel::OnCloseHdlrFn;
+use tokio_tungstenite::tungstenite::{Message, error::Error};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OfferReply {
@@ -26,96 +23,69 @@ pub(crate) struct OfferReply {
 
 pub(crate) type SocketTx = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
 
-// async fn connect_to_signaling_server<Fut: Future, F: (Fn(OfferReply, RawClient) -> Fut) + Send + 'static>(
-pub(crate) async fn connect_to_signaling_server<OfferHandler, OfferHandlerFuture, ReplyHandler, ReplyHandlerFuture, DisconnectHandler, DisconnectHandlerFuture>(
+pub(crate) async fn connect_to_signaling_server(
     host: &str,
-    on_offer: OfferHandler,
-    on_reply: ReplyHandler,
-    on_disconnect: DisconnectHandler,
-) -> SocketTx
-where
-    OfferHandler: Fn(OfferReply, SocketTx) -> OfferHandlerFuture + Send + Sync + 'static,
-    OfferHandlerFuture: Future<Output=()> + Send + 'static,
-    ReplyHandler: Fn(OfferReply, SocketTx) -> ReplyHandlerFuture + Send + Sync + 'static,
-    ReplyHandlerFuture: Future<Output=()> + Send + 'static,
-    DisconnectHandler: Fn() -> DisconnectHandlerFuture + Send + Sync + 'static,
-    DisconnectHandlerFuture: Future<Output=()> + Send + 'static,
-{
-    let host = host.to_owned();
-    let on_reply = Arc::new(on_reply);
-    let on_offer = Arc::new(on_offer);
+) -> Result<(SocketTx, UnboundedReceiverStream<OfferReply>), Error> {
+    let (ws_stream, _) = connect_async(host).await?;
+    println!("Connected to signaling server {}", host);
 
-    // let (stream, _) = connect_async("ws://127.0.0.1:5100")
-    let (stream, _) = connect_async("ws://34.75.203.169:5100")
-        .await
-        .expect("Couldn't connect to signaling server");
+    let (outgoing, incoming) = ws_stream.split();
+    let outgoing = Arc::new(Mutex::new(outgoing));
 
-    println!("Connected to signaling server {host}");
+    let (sender, receiver) = mpsc::unbounded_channel();
 
-    let (outgoing, mut incoming) = stream.split();
-    let outgoing: SocketTx = Arc::new(Mutex::new(outgoing));
     tokio::spawn({
-        let outgoing = outgoing.clone();
         async move {
+            let mut incoming = incoming;
             while let Some(message) = incoming.next().await {
                 match message {
-                    Ok(message) => {
-                        match message {
-                            Message::Text(text) => {
-                                let message: serde_json::Value = serde_json::from_str(&text).unwrap();
-                                match message["type"].as_str() {
-                                    Some("offer") => {
-                                        let message: OfferReply = serde_json::from_value(message).expect("Message didn't have expected format");
-                                        println!("Received offer from {}: {}", message.id, message.description);
-                                        on_offer(message, outgoing.clone()).await;
-                                    },
-                                    Some("reply") => {
-                                        let message: OfferReply = serde_json::from_value(message).expect("Message didn't have expected format");
-                                        println!("Received reply from {}: {}", message.id, message.description);
-                                        on_reply(message, outgoing.clone()).await;
-                                    },
-                                    t => println!("Unsupported message type sent: {:?}", t),
+                    Ok(Message::Text(text)) => {
+                        match serde_json::from_str::<OfferReply>(&text) {
+                            Ok(offer_reply) => {
+                                if let Err(e) = sender.send(offer_reply) {
+                                    eprintln!("Failed to send OfferReply to stream: {}", e);
+                                    break;
                                 }
                             }
-                            Message::Close(_) => {
-                                println!("Signaling server closed WebSocket connection");
-                                break;
+                            Err(e) => {
+                                eprintln!("Failed to parse OfferReply: {}", e);
                             }
-                            message => println!("Unsupported message sent: {message}")
                         }
                     }
-                    Err(error) => {
-                        println!("Error in WebSocket connection: {error}");
+                    Ok(Message::Close(_)) => {
                         break;
                     }
+                    Err(e) => {
+                        eprintln!("WebSocket error: {}", e);
+                        break;
+                    }
+                    _ => {}
                 }
             }
-
-            on_disconnect().await;
         }
     });
 
-    outgoing.clone()
+    Ok((outgoing, UnboundedReceiverStream::new(receiver)))
 }
 
 pub(crate) async fn register(id: &str, signaling_tx: SocketTx) {
     let mut signaling_tx = signaling_tx.lock().await;
-    signaling_tx.send(json!({
+    if let Err(e) = signaling_tx.send(Message::Text(json!({
         "type": "register",
         "id": id
-    }).to_string().into()).await.unwrap();
-    println!("Registered on signaling server as {id}");
+    }).to_string().into())).await {
+        eprintln!("Failed to send register message: {}", e);
+    }
+    println!("Registered on signaling server as {}", id);
 }
 
 pub async fn send_offer(offer: OfferReply, signaling_tx: SocketTx) {
-    signaling_tx
-        .lock()
-        .await
-        .send(Message::Text(Utf8Bytes::from(
-            serde_json::to_string(&offer).unwrap(),
-        )))
-        .await
-        .expect("Couldn't send offer");
+    let message = Message::Text(Utf8Bytes::from(
+        serde_json::to_string(&offer).unwrap(),
+    ));
+    if let Err(e) = signaling_tx.lock().await.send(message).await {
+        eprintln!("Failed to send offer: {}", e);
+    }
     println!("Sent offer");
 }
 
@@ -127,6 +97,9 @@ pub async fn send_reply_to_offer(offer: OfferReply, description: &str, signaling
         number: offer.number,
         description: description.to_string(),
     };
-    signaling_tx.lock().await.send(Message::Text(Utf8Bytes::from(serde_json::to_string(&reply).unwrap()))).await.expect("Couldn't send reply");
+    let message = Message::Text(Utf8Bytes::from(serde_json::to_string(&reply).unwrap()));
+    if let Err(e) = signaling_tx.lock().await.send(message).await {
+        eprintln!("Failed to send reply: {}", e);
+    }
     println!("Sent reply");
 }
