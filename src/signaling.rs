@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use futures::stream::SplitSink;
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -11,6 +11,9 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tokio_tungstenite::tungstenite::{Message, error::Error};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio::net::TcpStream;
+use futures::{Sink, Stream};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct OfferReply {
@@ -19,6 +22,115 @@ pub(crate) struct OfferReply {
     pub(crate) to: String,
     pub(crate) number: u32,
     pub(crate) description: String,
+}
+
+pub struct SignalingConnection {
+    inner: WebSocketStream<MaybeTlsStream<TcpStream>>,
+}
+
+impl SignalingConnection {
+    pub async fn connect(host: &str) -> Result<Self, Error> {
+        let (ws_stream, _) = connect_async(host).await?;
+        Ok(Self { inner: ws_stream })
+    }
+
+    pub async fn send(&mut self, msg: &impl Serialize) -> Result<()> {
+        let message = Message::Text(serde_json::to_string(msg).unwrap().into());
+        SinkExt::send(&mut self.inner, message).await?;
+        Ok(())
+    }
+
+    pub async fn register(&mut self, id: &str) -> Result<()> {
+        self.send(&json!({ "type": "register", "id": id })).await
+    }
+
+    pub fn into_split(self) -> (SignalingSink, SignalingStream) {
+        let (sink, stream) = self.inner.split();
+        (
+            SignalingSink { inner: sink },
+            SignalingStream { inner: stream }
+        )
+    }
+}
+
+// Implement direct Stream/Sink for unified usage
+impl Stream for SignalingConnection {
+    type Item = Result<OfferReply, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx).map(|opt| {
+            opt.map(|res| {
+                res.and_then(|msg| match msg {
+                    Message::Text(text) => serde_json::from_str(&text)
+                        .map_err(|e| Error::Protocol(e.into())),
+                    _ => Err(Error::Protocol("Unexpected non-text message".into()))
+                })
+            })
+        })
+    }
+}
+
+impl Sink<OfferReply> for SignalingConnection {
+    type Error = Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_ready(cx)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: OfferReply) -> Result<(), Self::Error> {
+        let msg = Message::Text(serde_json::to_string(&item).unwrap().into());
+        Pin::new(&mut self.inner).start_send(msg)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
+
+// Split types for when you need split ownership
+pub struct SignalingSink {
+    inner: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+}
+
+pub struct SignalingStream {
+    inner: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+}
+
+impl Stream for SignalingStream {
+    type Item = Result<OfferReply, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Similar poll logic as above
+    }
+    
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, None)
+    }
+}
+
+impl Sink<OfferReply> for SignalingSink {
+    type Error = Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_ready(cx)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: OfferReply) -> Result<(), Self::Error> {
+        let msg = Message::Text(serde_json::to_string(&item).unwrap().into());
+        Pin::new(&mut self.inner).start_send(msg)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_close(cx)
+    }
 }
 
 pub(crate) type SocketTx = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
