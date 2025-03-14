@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use reply_manager::ResponseManager;
-use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
     sync::Mutex,
 };
 use webrtc::{
@@ -18,7 +17,7 @@ use webrtc::{
         APIBuilder,
     }, data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel}, ice_transport::ice_server::RTCIceServer, interceptor::registry::Registry, peer_connection::{
         certificate::RTCCertificate, configuration::RTCConfiguration, sdp::session_description::RTCSessionDescription, RTCPeerConnection
-    }, rtp_transceiver::rtp_codec::RTCRtpCodecCapability
+    }
 };
 
 mod signaling;
@@ -38,15 +37,16 @@ enum Command {
     Server {
         #[clap(long, default_value = "testserver")]
         id: String,
-        #[clap(long, default_value = "localhost:25565")]
+        // #[clap(long, default_value = "localhost:3000")]
+        #[clap(long, default_value = "serveo.net:3001")]
         minecraft_server: String,
-        #[clap(long, default_value = "ws://localhost:5100")]
+        #[clap(long, default_value = "ws://34.75.203.169:5100")]
         signaling_server: String,
     },
     Client {
         #[clap(long, default_value = "client")]
         id: String,
-        #[clap(long, default_value = "ws://localhost:5100")]
+        #[clap(long, default_value = "ws://34.75.203.169:5100")]
         signaling_server: String,
     },
 }
@@ -105,18 +105,25 @@ async fn handle_server_offer(
     minecraft_server: &str,
 ) -> Result<()> {
     let peer_connection = create_peer_connection(certificate.clone()).await?;
+
     let (detached_sender, detached_receiver) = tokio::sync::oneshot::channel();
+    let sender_container = Arc::new(Mutex::new(Some(detached_sender)));
 
     peer_connection.on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
+        let sender_container = sender_container.clone();
         let d_clone = d.clone();
-        let sender = detached_sender; // Move the sender into the outer closure
         
-        d_clone.on_open(Box::new(move || {
+        d_clone.clone().on_open(Box::new(move || {
             let d_clone2 = d_clone.clone();
+            let sender_container = sender_container.clone();
             Box::pin(async move {
                 match d_clone2.detach().await {
                     Ok(raw) => {
-                        let _ = sender.send(raw); // Use the moved sender
+                        // Take the sender from the Mutex
+                        let mut guard = sender_container.lock().await;
+                        if let Some(sender) = guard.take() {
+                            let _ = sender.send(raw);
+                        }
                     },
                     Err(e) => eprintln!("Failed to detach server data channel: {}", e),
                 }
@@ -202,7 +209,9 @@ async fn handle_client_connection(
     reply_manager: Arc<ResponseManager<OfferReply>>,
 ) -> Result<()> {
     let peer_connection = create_peer_connection(certificate.clone()).await?;
+
     let (detached_sender, detached_receiver) = tokio::sync::oneshot::channel();
+    let sender_container = Arc::new(Mutex::new(Some(detached_sender)));
 
     let data_channel = peer_connection
         .create_data_channel(
@@ -214,14 +223,17 @@ async fn handle_client_connection(
         )
         .await?;
 
-    // Clone the Arc before moving into the closure
-    let data_channel_clone = Arc::clone(&data_channel);
-    data_channel.on_open(Box::new(move || {
-        let sender = detached_sender; // Move the sender into the closure
+    data_channel.clone().on_open(Box::new(move || {
+        let data_channel_clone = data_channel.clone();
+        let sender_container = sender_container.clone();
         Box::pin(async move {
             match data_channel_clone.detach().await {
                 Ok(raw) => {
-                    let _ = sender.send(raw);
+                    // Take the sender from the Mutex
+                    let mut guard = sender_container.lock().await;
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(raw);
+                    }
                 },
                 Err(e) => eprintln!("Failed to detach client data channel: {}", e),
             }
@@ -311,104 +323,6 @@ async fn proxy_traffic(
     tokio::select! {
         _ = read_task => {},
         _ = write_task => {},
-    }
-
-    Ok(())
-}
-
-async fn proxy_data(
-    data_channel: Arc<RTCDataChannel>,
-    minecraft_stream: TcpStream,
-) -> Result<()> {
-    let (mut minecraft_read, mut minecraft_write) = tokio::io::split(minecraft_stream);
-
-    let (data_sender, mut data_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let dc_clone = data_channel.clone();
-    data_channel.on_message(Box::new(move |msg| {
-        let _ = data_sender.send(msg.data.to_vec());
-        Box::pin(async {})
-    }));
-
-    let write_task = tokio::spawn(async move {
-        while let Some(data) = data_receiver.recv().await {
-            if let Err(e) = minecraft_write.write_all(&data).await {
-                eprintln!("Failed to write to Minecraft server: {}", e);
-                break;
-            }
-        }
-    });
-
-    let read_task = tokio::spawn(async move {
-        let mut buf = [0u8; 4096];
-        loop {
-            match minecraft_read.read(&mut buf).await {
-                Ok(n) if n == 0 => break,
-                Ok(n) => {
-                    if let Err(e) = dc_clone.send(&bytes::Bytes::copy_from_slice(&buf[..n])).await {
-                        eprintln!("Failed to send to data channel: {}", e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to read from Minecraft server: {}", e);
-                    break;
-                }
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = write_task => {},
-        _ = read_task => {},
-    }
-
-    Ok(())
-}
-
-async fn proxy_client_data(
-    data_channel: Arc<RTCDataChannel>,
-    minecraft_stream: TcpStream,
-) -> Result<()> {
-    let (mut minecraft_read, mut minecraft_write) = tokio::io::split(minecraft_stream);
-
-    let (data_sender, mut data_receiver) = tokio::sync::mpsc::unbounded_channel();
-    let dc_clone = data_channel.clone();
-    data_channel.on_message(Box::new(move |msg| {
-        let _ = data_sender.send(msg.data.to_vec());
-        Box::pin(async {})
-    }));
-
-    let write_task = tokio::spawn(async move {
-        while let Some(data) = data_receiver.recv().await {
-            if let Err(e) = minecraft_write.write_all(&data).await {
-                eprintln!("Failed to write to Minecraft client: {}", e);
-                break;
-            }
-        }
-    });
-
-    let read_task = tokio::spawn(async move {
-        let mut buf = [0u8; 4096];
-        loop {
-            match minecraft_read.read(&mut buf).await {
-                Ok(n) if n == 0 => break,
-                Ok(n) => {
-                    if let Err(e) = dc_clone.send(&bytes::Bytes::copy_from_slice(&buf[..n])).await {
-                        eprintln!("Failed to send to data channel: {}", e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to read from Minecraft client: {}", e);
-                    break;
-                }
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = write_task => {},
-        _ = read_task => {},
     }
 
     Ok(())
