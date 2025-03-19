@@ -24,7 +24,8 @@ use webrtc::{
 mod signaling;
 mod tcp_helpers;
 mod reply_manager;
-use signaling::{connect_to_signaling_server, register, send_offer, send_reply_to_offer, OfferReply, SocketTx};
+mod new;
+use signaling::{OfferReply, SignalingConnection, SignalingEvent, SignalingSender};
 use tcp_helpers::{connect_to_local_server, listen_for_minecraft_client_connections};
 
 #[derive(Parser)]
@@ -71,43 +72,37 @@ async fn main() -> Result<()> {
 async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str) -> Result<()> {
     let certificate = generate_certificate().await?;
 
-    let (signaling_tx, mut offer_reply_stream) = connect_to_signaling_server(signaling_host)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to signaling server: {}", e))?;
+    let signaling_conn = SignalingConnection::connect(signaling_host).await?;
+    let (sender, mut receiver) = signaling_conn.split();
+    sender.register(id).await?;
 
-    register(id, signaling_tx.clone()).await;
-
-    let certificate_clone = certificate.clone();
-    let minecraft_server_clone = minecraft_server.to_string();
-    let signaling_tx_clone = signaling_tx.clone();
-
-    tokio::spawn(async move {
-        while let Some(offer_reply) = offer_reply_stream.next().await {
-            if offer_reply.r#type == "offer" {
-                if let Err(e) = handle_server_offer(
-                    offer_reply,
-                    signaling_tx_clone.clone(),
-                    &certificate_clone,
-                    &minecraft_server_clone,
-                )
-                .await
-                {
-                    eprintln!("Error handling server offer: {}", e);
-                }
-            } else {
-                eprintln!("Unexpected message type: {}", offer_reply.r#type);
+    loop {
+        match receiver.next_event().await {
+            Some(Ok(SignalingEvent::Offer(offer))) => {
+                handle_server_offer(offer, &sender, &certificate, minecraft_server).await?;
+            }
+            Some(Ok(SignalingEvent::Reply(reply))) => {
+                eprintln!("Unexpected reply received: {:?}", reply);
+            }
+            Some(Ok(SignalingEvent::Unknown(value))) => {
+                eprintln!("Received unknown message: {:?}", value);
+            }
+            Some(Err(e)) => {
+                eprintln!("Error receiving message: {}", e);
+            }
+            None => {
+                eprintln!("Disconnected from signaling server");
+                break;
             }
         }
-        eprintln!("Disconnected from signaling server");
-    });
+    }
 
-    tokio::signal::ctrl_c().await?;
     Ok(())
 }
 
 async fn handle_server_offer(
     offer: OfferReply,
-    signaling_tx: SocketTx,
+    sender: &SignalingSender,
     certificate: &RTCCertificate,
     minecraft_server: &str,
 ) -> Result<()> {
@@ -155,7 +150,14 @@ async fn handle_server_offer(
         .ok_or_else(|| anyhow!("No local description"))?;
     let json_str = serde_json::to_string(&local_desc)?;
 
-    send_reply_to_offer(offer, &json_str, signaling_tx).await;
+    let reply = OfferReply {
+        r#type: "reply".to_string(),
+        id: offer.to,
+        to: offer.id,
+        number: offer.number,
+        description: json_str,
+    };
+    sender.send_offer_reply(reply).await?;
 
     let detached_data_channel = detached_receiver.await?;
     let minecraft_stream = connect_to_local_server(minecraft_server).await;
@@ -164,22 +166,19 @@ async fn handle_server_offer(
     Ok(())
 }
 
-
 async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
     let certificate = generate_certificate().await?;
     let reply_manager = Arc::new(ResponseManager::new());
 
-    let (signaling_tx, mut offer_reply_stream) = connect_to_signaling_server(signaling_host)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to signaling server: {}", e))?;
-
-    register(id, signaling_tx.clone()).await;
+    let signaling_conn = SignalingConnection::connect(signaling_host).await?;
+    let (sender, mut receiver) = signaling_conn.split();
+    sender.register(id).await?;
 
     let reply_manager_clone = reply_manager.clone();
     tokio::spawn(async move {
-        while let Some(offer_reply) = offer_reply_stream.next().await {
-            if offer_reply.r#type == "reply" {
-                reply_manager_clone.handle_response(offer_reply.number, offer_reply).await;
+        while let Some(event) = receiver.next_event().await {
+            if let Ok(SignalingEvent::Reply(reply)) = event {
+                reply_manager_clone.handle_response(reply.number, reply).await;
             } else {
                 eprintln!("Unexpected message type: {}", offer_reply.r#type);
             }
@@ -188,15 +187,14 @@ async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
     });
 
     listen_for_minecraft_client_connections("127.0.0.1:25565", {
-        let signaling_tx = signaling_tx.clone();
+        let sender = sender.clone();
         let certificate = certificate.clone();
         let reply_manager = reply_manager.clone();
         move |stream, _| {
-            let signaling_tx = signaling_tx.clone();
             let certificate = certificate.clone();
             let reply_manager = reply_manager.clone();
             async move {
-                if let Err(e) = handle_client_connection(stream, signaling_tx, &certificate, reply_manager).await {
+                if let Err(e) = handle_client_connection(stream, &sender, &certificate, reply_manager).await {
                     eprintln!("Error handling client connection: {}", e);
                 }
             }
@@ -208,7 +206,7 @@ async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
 
 async fn handle_client_connection(
     minecraft_stream: TcpStream,
-    signaling_tx: SocketTx,
+    sender: &SignalingSender,
     certificate: &RTCCertificate,
     reply_manager: Arc<ResponseManager<OfferReply>>,
 ) -> Result<()> {
@@ -259,16 +257,15 @@ async fn handle_client_connection(
     let offer_number = rand::random::<u32>();
     let reply_receiver = reply_manager.wait_for_response(offer_number).await;
 
-    send_offer(
+    sender.send_offer_reply(
         OfferReply {
             r#type: "offer".to_string(),
             id: "client".to_string(),
             to: "testserver".to_string(),
             number: offer_number,
             description: json_str,
-        },
-        signaling_tx,
-    ).await;
+        }
+    ).await.unwrap();
 
     let reply = reply_receiver.await?;
     let answer = serde_json::from_str::<RTCSessionDescription>(&reply.description)?;
@@ -332,13 +329,13 @@ async fn proxy_traffic(
     Ok(())
 }
 
-async fn generate_certificate() -> Result<RTCCertificate> {
+pub async fn generate_certificate() -> Result<RTCCertificate> {
     let keypair = rcgen::KeyPair::generate()?;
     let cert = RTCCertificate::from_key_pair(keypair)?;
     Ok(cert)
 }
 
-async fn create_peer_connection(certificate: RTCCertificate) -> Result<Arc<RTCPeerConnection>> {
+pub async fn create_peer_connection(certificate: RTCCertificate) -> Result<Arc<RTCPeerConnection>> {
     let mut m = MediaEngine::default();
     m.register_default_codecs()?;
 
