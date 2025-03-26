@@ -40,40 +40,16 @@ async fn client() -> Result<()> {
     Ok(())
 }
 
-async fn server() -> Result<()> {
-    let peer = Peer {
-        id: "testserver".to_string(),
-    };
-
-    let mut session = Session::new("ws://34.75.203.169:5100".to_string()).await?;
-
-    session.register(peer.id.clone()).await?;
-
-    while let Some(offer) = session.accept().await {
-        let peer_connection = PeerConnection::accept(offer, &session).await?;
-
-        let data_channel = peer_connection
-            .open_detached_channel("minecraft".to_string())
-            .await?;
-
-        let minecraft_stream = connect_to_local_server("serveo.net:3001").await;
-
-        proxy_traffic(data_channel, minecraft_stream).await?;
-    }
-
-    Ok(())
-}
-
-struct Peer {
+pub struct Peer {
     pub id: PeerId,
 }
 
-type PeerId = String;
+pub type PeerId = String;
 
 // TODO store signaling connections etc? store open connections to other peers?
 impl Peer {}
 
-struct PeerConnection {
+pub struct PeerConnection {
     pub id: PeerId,
     pub to: PeerId,
     channel_response_manager: Arc<ResponseManager<String, Arc<RTCDataChannel>>>,
@@ -297,7 +273,6 @@ pub struct Session {
     connection_receiver: mpsc::Receiver<UnacceptedPeerConnection>,
 
     sink: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
-    // stream: Arc<Mutex<futures::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
 }
 
 impl Session {
@@ -370,7 +345,7 @@ impl Session {
             // stream: Arc::new(Mutex::new(stream)),
         })
     }
-    async fn register(&self, id: String) -> Result<()> {
+    pub async fn register(&self, id: String) -> Result<()> {
         let msg = serde_json::json!({
             "type": "register",
             "id": id,
