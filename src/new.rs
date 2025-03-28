@@ -8,6 +8,7 @@ use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, Mutex},
 };
+use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{
     tungstenite::{Message, Utf8Bytes},
     MaybeTlsStream, WebSocketStream,
@@ -17,7 +18,7 @@ use webrtc::{
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
-
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use crate::signaling::{Offer, OfferReplyId};
 use crate::{create_peer_connection, generate_certificate, signaling::OfferReply, ResponseManager};
 
@@ -371,4 +372,29 @@ impl SignalingConnection for Session {
         self.send_json(value).await
         // self.send_offer_reply(reply).await
     }
+}
+
+
+
+/// Set the handler for Peer connection state
+/// This will notify you when the peer has connected/disconnected
+pub(crate) fn setup_peer_connection_state_change_listener(peer_connection: &Arc<RTCPeerConnection>, done_tx: Sender<()>) {
+    peer_connection.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
+        println!("Peer Connection State has changed: {s}");
+
+        if s == RTCPeerConnectionState::Failed {
+            // Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+            // Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
+            // Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
+            println!("Peer connection has failed, exiting");
+            let _ = done_tx.try_send(());
+        }
+
+        if s == RTCPeerConnectionState::Closed {
+            println!("Peer connection closed, exiting");
+            let _ = done_tx.try_send(());
+        }
+
+        Box::pin(async {})
+    }));
 }
