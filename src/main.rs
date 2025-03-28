@@ -26,6 +26,8 @@ mod new;
 mod reply_manager;
 mod signaling;
 mod tcp_helpers;
+mod util;
+
 use tcp_helpers::{connect_to_local_server, listen_for_minecraft_client_connections};
 
 #[derive(Parser)]
