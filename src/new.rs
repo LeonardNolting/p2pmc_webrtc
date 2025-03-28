@@ -18,7 +18,7 @@ use webrtc::{
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
 
-use crate::signaling::Offer;
+use crate::signaling::{Offer, OfferReplyId};
 use crate::{create_peer_connection, generate_certificate, signaling::OfferReply, ResponseManager};
 
 pub struct Peer {
@@ -347,8 +347,6 @@ impl JsonCommunication for Session {
         Ok(())
     }
 }
-
-pub type OfferReplyId = u32;
 
 impl SignalingConnection for Session {
     fn get_connection_receiver(&mut self) -> &mut mpsc::Receiver<UnacceptedPeerConnection> {
