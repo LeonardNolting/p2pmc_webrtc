@@ -12,33 +12,14 @@ use tokio_tungstenite::{
     tungstenite::{Message, Utf8Bytes},
     MaybeTlsStream, WebSocketStream,
 };
-use webrtc::peer_connection;
 use webrtc::{
     data::data_channel::DataChannel,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
 
-use crate::proxy_traffic;
 use crate::signaling::Offer;
-use crate::tcp_helpers::connect_to_local_server;
 use crate::{create_peer_connection, generate_certificate, signaling::OfferReply, ResponseManager};
-
-async fn client() -> Result<()> {
-    let peer = Peer {
-        id: "client".to_string(),
-    };
-
-    let session = Session::new("ws://34.75.203.169:5100".to_string()).await?;
-
-    session.register(peer.id.clone()).await?;
-
-    session
-        .connect(peer.id.clone(), "testserver".to_string())
-        .await?;
-
-    Ok(())
-}
 
 pub struct Peer {
     pub id: PeerId,
