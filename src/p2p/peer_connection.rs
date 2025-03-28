@@ -15,7 +15,7 @@ use webrtc::{
 use crate::p2p::offer_reply::Offer;
 use crate::p2p::offer_reply::OfferReply;
 use crate::p2p::signaling_connection::SignalingConnection;
-use crate::util::new_rtc_peer_connection::create_peer_connection;
+use crate::util::new_rtc_peer_connection::{create_peer_connection, setup_peer_connection_state_change_listener};
 
 pub struct PeerConnection {
     pub id: PeerId,
@@ -32,6 +32,12 @@ impl PeerConnection {
         signaling_connection: &T,
     ) -> Result<Self> {
         let rtc_peer_connection = create_peer_connection(generate_certificate().await?).await?;
+
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Log changes to connection state
+        setup_peer_connection_state_change_listener(&rtc_peer_connection, done_tx);
+        
         let peer_connection = Self::new(id.clone(), to.clone(), rtc_peer_connection.clone());
 
         let offer = rtc_peer_connection.create_offer(None).await?;
@@ -74,6 +80,12 @@ impl PeerConnection {
         signaling_connection: &T,
     ) -> Result<Self> {
         let rtc_peer_connection = create_peer_connection(generate_certificate().await?).await?;
+
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Log changes to connection state
+        setup_peer_connection_state_change_listener(&rtc_peer_connection, done_tx);
+        
         let peer_connection = Self::new(
             offer.id.clone(),
             offer.to.clone(),
