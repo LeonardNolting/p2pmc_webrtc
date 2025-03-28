@@ -4,7 +4,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use new::{Peer, PeerConnection, PeerConnector, Session};
-use reply_manager::ResponseManager;
+use util::response_manager::ResponseManager;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -23,7 +23,6 @@ use webrtc::{
 };
 
 mod new;
-mod reply_manager;
 mod signaling;
 mod tcp_helpers;
 mod util;
