@@ -1,29 +1,18 @@
 use std::sync::Arc;
 
+use crate::p2p::peer::Peer;
+use crate::p2p::peer_connection::PeerConnection;
+use crate::p2p::peer_connector::PeerConnector;
+use crate::p2p::session::Session;
+use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use new::{Peer, PeerConnection, PeerConnector, Session};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use util::response_manager::ResponseManager;
-use webrtc::{
-    api::{
-        interceptor_registry::register_default_interceptors, media_engine::MediaEngine,
-        setting_engine::SettingEngine, APIBuilder,
-    },
-    ice_transport::ice_server::RTCIceServer,
-    interceptor::registry::Registry,
-    peer_connection::{
-        certificate::RTCCertificate, configuration::RTCConfiguration,
-        RTCPeerConnection,
-    },
-};
-
-mod new;
-mod offer_reply;
-mod util;
-
-use crate::util::proxy_traffic::proxy_traffic;
 use util::minecraft_connections::{connect_to_local_server, listen_for_minecraft_client_connections};
+use util::response_manager::ResponseManager;
+use webrtc::peer_connection::certificate::RTCCertificate;
+
+mod util;
+mod p2p;
 
 #[derive(Parser)]
 struct Cli {
@@ -131,33 +120,4 @@ pub async fn generate_certificate() -> Result<RTCCertificate> {
     let keypair = rcgen::KeyPair::generate()?;
     let cert = RTCCertificate::from_key_pair(keypair)?;
     Ok(cert)
-}
-
-pub async fn create_peer_connection(certificate: RTCCertificate) -> Result<Arc<RTCPeerConnection>> {
-    let mut m = MediaEngine::default();
-    m.register_default_codecs()?;
-
-    let mut registry = Registry::new();
-    registry = register_default_interceptors(registry, &mut m)?;
-
-    // Enable detached data channels
-    let mut setting_engine = SettingEngine::default();
-    setting_engine.detach_data_channels();
-
-    let api = APIBuilder::new()
-        .with_media_engine(m)
-        .with_interceptor_registry(registry)
-        .with_setting_engine(setting_engine)
-        .build();
-
-    let config = RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-            ..Default::default()
-        }],
-        certificates: vec![certificate],
-        ..Default::default()
-    };
-
-    Ok(Arc::new(api.new_peer_connection(config).await?))
 }
