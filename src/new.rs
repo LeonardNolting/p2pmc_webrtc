@@ -19,8 +19,8 @@ use webrtc::{
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use crate::signaling::{Offer, OfferReplyId};
-use crate::{create_peer_connection, generate_certificate, signaling::OfferReply, ResponseManager};
+use crate::offer_reply::{Offer, OfferReplyId};
+use crate::{create_peer_connection, generate_certificate, offer_reply::OfferReply, ResponseManager};
 
 pub struct Peer {
     pub id: PeerId,

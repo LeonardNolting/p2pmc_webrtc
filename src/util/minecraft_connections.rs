@@ -16,8 +16,6 @@ use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::certificate::RTCCertificate;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
-
-
 pub async fn connect_to_local_server(url: &str) -> TcpStream {
     // set up a connection to the Minecraft server
     println!("Connecting to Minecraft server at {url}");

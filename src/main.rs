@@ -23,11 +23,10 @@ use webrtc::{
 };
 
 mod new;
-mod signaling;
-mod tcp_helpers;
+mod offer_reply;
 mod util;
 
-use tcp_helpers::{connect_to_local_server, listen_for_minecraft_client_connections};
+use util::minecraft_connections::{connect_to_local_server, listen_for_minecraft_client_connections};
 
 #[derive(Parser)]
 struct Cli {
