@@ -1,26 +1,26 @@
 use std::sync::Arc;
 
+use crate::offer_reply::{Offer, OfferReplyId};
+use crate::{create_peer_connection, generate_certificate, offer_reply::OfferReply, ResponseManager};
 use anyhow::anyhow;
 use anyhow::Result;
 use futures::{channel, stream::SplitSink, SinkExt, StreamExt};
 use rand::random;
+use tokio::sync::mpsc::Sender;
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, Mutex},
 };
-use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{
     tungstenite::{Message, Utf8Bytes},
     MaybeTlsStream, WebSocketStream,
 };
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::{
     data::data_channel::DataChannel,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
-use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use crate::offer_reply::{Offer, OfferReplyId};
-use crate::{create_peer_connection, generate_certificate, offer_reply::OfferReply, ResponseManager};
 
 pub struct Peer {
     pub id: PeerId,

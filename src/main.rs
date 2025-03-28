@@ -1,14 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use new::{Peer, PeerConnection, PeerConnector, Session};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use util::response_manager::ResponseManager;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
 use webrtc::{
     api::{
         interceptor_registry::register_default_interceptors, media_engine::MediaEngine,
@@ -26,8 +22,8 @@ mod new;
 mod offer_reply;
 mod util;
 
-use util::minecraft_connections::{connect_to_local_server, listen_for_minecraft_client_connections};
 use crate::util::proxy_traffic::proxy_traffic;
+use util::minecraft_connections::{connect_to_local_server, listen_for_minecraft_client_connections};
 
 #[derive(Parser)]
 struct Cli {
