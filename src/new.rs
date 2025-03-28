@@ -155,12 +155,16 @@ impl PeerConnection {
         peer_connection.on_data_channel({
             let channel_response_manager = channel_response_manager.clone();
             Box::new(move |data_channel: Arc<RTCDataChannel>| {
-                channel_response_manager
-                    .handle_response(data_channel.label().to_string(), data_channel);
-
-                Box::pin(async {})
+                let channel_response_manager = channel_response_manager.clone();
+                Box::pin(async move {
+                    channel_response_manager
+                        .handle_response(data_channel.label().to_string(), data_channel).await;
+                })
             })
         });
+
+        // TODO create default data channel for signaling
+        // and implement PeerConnector for PeerConnection
 
         Self {
             id,
