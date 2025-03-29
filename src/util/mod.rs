@@ -1,7 +1,8 @@
 pub mod log_on_drop;
 pub mod crypto;
 pub mod response_manager;
-pub mod minecraft_connections;
+pub mod minecraft_connector;
 pub mod proxy_traffic;
 pub mod new_rtc_peer_connection;
 pub mod parse_server;
+pub mod minecraft_listener;

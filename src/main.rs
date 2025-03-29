@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 use crate::p2p::peer::Peer;
 use crate::p2p::peer_connection::PeerConnection;
 use crate::p2p::peer_connector::PeerConnector;
@@ -7,11 +6,12 @@ use crate::p2p::session::Session;
 use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tokio::time::sleep;
-use tracing::{error, info, info_span, Instrument};
-use util::minecraft_connections::{connect_to_local_minecraft_server, listen_for_minecraft_client_connections};
+use tracing::{info, info_span, Instrument, Span};
 use util::response_manager::ResponseManager;
 use webrtc::peer_connection::certificate::RTCCertificate;
+use crate::util::minecraft_connector::MinecraftConnector;
+use crate::util::minecraft_listener::MinecraftListener;
+use crate::util::parse_server::parse_server;
 
 mod util;
 mod p2p;
@@ -27,17 +27,19 @@ enum Command {
     Server {
         #[clap(long, default_value = "testserver")]
         id: String,
+        #[clap(long, default_value = "ws://34.75.203.169:5100")]
+        signaling_server: String,
         #[clap(long, default_value = "localhost:3000")]
         // #[clap(long, default_value = "serveo.net:3001")]
         minecraft_server: String,
-        #[clap(long, default_value = "ws://34.75.203.169:5100")]
-        signaling_server: String,
     },
     Client {
         #[clap(long, default_value = "client")]
         id: String,
         #[clap(long, default_value = "ws://34.75.203.169:5100")]
         signaling_server: String,
+        #[clap(long, default_value = "127.0.0.2:25565")]
+        minecraft_adapter: String,
     },
 }
 
@@ -61,19 +63,18 @@ async fn main() -> Result<()> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
     
-    info!("Jude running");
-    
     let cli = Cli::parse();
     match cli.command {
         Command::Server {
             id,
-            minecraft_server,
             signaling_server,
+            minecraft_server,
         } => run_server_proxy(&signaling_server, &id, &minecraft_server).await,
         Command::Client {
             id,
             signaling_server,
-        } => run_client_proxy(&signaling_server, &id).await,
+            minecraft_adapter,
+        } => run_client_proxy(&signaling_server, &id, &minecraft_adapter).await,
     }
 }
 
@@ -90,12 +91,10 @@ async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str
         let peer_connection = PeerConnection::accept(offer, &session).await?;
 
         let data_channel = peer_connection
-            .accept_channel("minecraft".to_string())
-            .await.await?;
-        
-        let data_channel = data_channel.detach().await?;
+            .accept_channel_detached("minecraft".to_string())
+            .await.await;
 
-        let minecraft_stream = connect_to_local_minecraft_server(minecraft_server).await;
+        let minecraft_stream = MinecraftConnector::connect(minecraft_server).await?;
 
         proxy_traffic(data_channel, minecraft_stream).await?;
     }
@@ -103,49 +102,36 @@ async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str
     Ok(())
 }
 
-#[tracing::instrument(name = "client", skip(signaling_host))]
-async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
-    info!(signaling_host, "Starting client proxy");
-    
+#[tracing::instrument(name = "client", skip(signaling_host, minecraft_adapter))]
+async fn run_client_proxy(signaling_host: &str, id: &str, minecraft_adapter: &str) -> Result<()> {
+    info!(signaling_host, minecraft_adapter, "Starting client proxy");
     let peer = Peer { id: id.to_string() };
 
     let session = Arc::new(Session::new(signaling_host.to_string()).await?);
 
     session.clone().register(peer.id.clone()).await?;
 
-    /* tokio::spawn(async move {
-        while let Some(event) = receiver.next_event().await {
-            if let Ok(SignalingEvent::Reply(reply)) = event {
-                reply_manager_clone
-                    .handle_response(reply.number, reply)
-                    .await;
-            } else {
-                eprintln!("Unexpected message type: {}", offer_reply.r#type);
-            }
-        }
-        eprintln!("Disconnected from signaling server");
-    }); */
+    let listener = MinecraftListener::bind(minecraft_adapter).await?;
 
-    listen_for_minecraft_client_connections("127.0.0.1:25565", {
+    loop {
+        let (mut stream, _addr) = listener.accept().await?;
+
+        let id = id.to_string();
         let session = session.clone();
-        move |stream, addr| {
-            let session = session.clone();
-            async move {
-                info!("Minecraft client connected from {addr}");
-                let connection = session
-                    .connect("client".to_string(), "testserver".to_string())
-                    .await.expect("Error handling client connection");
-                
-                let data_channel = connection.open_detached_channel("minecraft".to_string()).await.unwrap();
+        
+        tokio::spawn(async move {
+            let server = parse_server(&mut stream).await.unwrap();
+            Span::current().record("server", &server);
+            
+            let connection = session
+                .connect(id, server)
+                .await.expect("Error handling client connection");
 
-                proxy_traffic(data_channel, stream).await.unwrap();
-                sleep(Duration::from_secs(2000)).await;
-            }.instrument(info_span!("client_connection"))
-        }
-    })
-    .await;
+            let data_channel = connection.open_detached_channel("minecraft".to_string()).await.unwrap();
 
-    Ok(())
+            proxy_traffic(data_channel, stream).await.unwrap();
+        }.instrument(info_span!("minecraft_client_adapter_connection", server = tracing::field::Empty)));
+    }
 }
 
 pub async fn generate_certificate() -> Result<RTCCertificate> {
