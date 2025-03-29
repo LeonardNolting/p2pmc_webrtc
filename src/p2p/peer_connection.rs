@@ -1,10 +1,11 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use crate::p2p::peer::PeerId;
 use crate::{generate_certificate, ResponseManager};
 use anyhow::anyhow;
 use anyhow::Result;
-use futures::channel;
+use futures::{channel, FutureExt};
 use rand::random;
 use tokio::sync::oneshot;
 use tracing::info;
@@ -42,6 +43,9 @@ impl PeerConnection {
         setup_peer_connection_state_change_listener(&rtc_peer_connection, done_tx);
         
         let peer_connection = Self::new(id.clone(), to.clone(), rtc_peer_connection.clone());
+        
+        // let default_channel_future = peer_connection.open_channel("default".to_string());
+        let default_data_channel = peer_connection.create_reliable_data_channel("default").await?;
 
         let offer = rtc_peer_connection.create_offer(None).await?;
 
@@ -74,6 +78,9 @@ impl PeerConnection {
             .await?;
         let answer = serde_json::from_str::<RTCSessionDescription>(&reply.description)?;
         rtc_peer_connection.set_remote_description(answer).await?;
+        
+        // let _default_channel = default_channel_future.await?;
+        Self::wait_for_data_channel_to_open(default_data_channel.clone()).await?;
 
         Ok(peer_connection)
     }
@@ -84,7 +91,7 @@ impl PeerConnection {
         signaling_connection: &T,
     ) -> Result<Self> {
         info!(?offer, "Accepting peer connection offer");
-        
+
         let rtc_peer_connection = create_peer_connection(generate_certificate().await?).await?;
 
         let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -97,6 +104,8 @@ impl PeerConnection {
             offer.to.clone(),
             rtc_peer_connection.clone(),
         );
+        
+        let default_channel_future = peer_connection.accept_channel("default".to_string());
 
         // TODO just use RTCSessionDescription in OfferReply for automatic serialization and deserialization
         let description =
@@ -132,6 +141,8 @@ impl PeerConnection {
                 description: serde_json::to_string(&local_description)?,
             })
             .await?;
+        
+        let _default_channel = default_channel_future.await;
 
         Ok(peer_connection)
     }
@@ -161,6 +172,7 @@ impl PeerConnection {
     }
 
     async fn create_reliable_data_channel(&self, name: &str) -> Result<Arc<RTCDataChannel>> {
+        info!(?name, "Creating reliable data channel");
         Ok(self
             .peer_connection
             .create_data_channel(
@@ -207,13 +219,22 @@ impl PeerConnection {
     }
 
     pub async fn open_detached_channel(&self, name: String) -> Result<Arc<DataChannel>> {
-        let data_channel = self.open_channel(name).await.unwrap();
+        let data_channel = self.open_channel(name).await?;
 
         Ok(data_channel.detach().await?)
     }
 
     pub async fn accept_channel(&self, name: String) -> oneshot::Receiver<Arc<RTCDataChannel>> {
         self.channel_response_manager.wait_for_response(name).await
+    }
+    
+    // TODO is this right? why is .map awaited?
+    pub async fn accept_channel_detached(&self, name: String) -> impl Future<Output = Arc<DataChannel>> + Send + 'static {
+        let data_channel = self.accept_channel(name).await;
+        
+        data_channel.map(async |data_channel| {
+            data_channel.unwrap().detach().await.unwrap()
+        }).await
     }
 }
 

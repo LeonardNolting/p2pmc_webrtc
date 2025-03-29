@@ -15,7 +15,7 @@ pub async fn connect_to_local_minecraft_server(url: &str) -> TcpStream {
     stream
 }
 
-#[tracing::instrument(skip(on_connect))]
+#[tracing::instrument(skip(on_connect, url))]
 pub async fn listen_for_minecraft_client_connections<
     Fut: Future,
     F: (Fn(TcpStream, SocketAddr) -> Fut) + Send + 'static,

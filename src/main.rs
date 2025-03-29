@@ -77,9 +77,9 @@ async fn main() -> Result<()> {
     }
 }
 
-#[tracing::instrument(name = "server")]
+#[tracing::instrument(name = "server", skip(signaling_host, minecraft_server))]
 async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str) -> Result<()> {
-    info!("Starting server proxy");
+    info!(signaling_host, minecraft_server, "Starting server proxy");
     let peer = Peer { id: id.to_string() };
 
     let mut session = Session::new(signaling_host.to_string()).await?;
@@ -90,8 +90,10 @@ async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str
         let peer_connection = PeerConnection::accept(offer, &session).await?;
 
         let data_channel = peer_connection
-            .open_detached_channel("minecraft".to_string())
-            .await?;
+            .accept_channel("minecraft".to_string())
+            .await.await?;
+        
+        let data_channel = data_channel.detach().await?;
 
         let minecraft_stream = connect_to_local_minecraft_server(minecraft_server).await;
 
@@ -101,9 +103,9 @@ async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str
     Ok(())
 }
 
-#[tracing::instrument(name = "client")]
+#[tracing::instrument(name = "client", skip(signaling_host))]
 async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
-    info!("Starting client proxy");
+    info!(signaling_host, "Starting client proxy");
     
     let peer = Peer { id: id.to_string() };
 
@@ -130,14 +132,13 @@ async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
             let session = session.clone();
             async move {
                 info!("Minecraft client connected from {addr}");
-                if let Err(e) = session
+                let connection = session
                     .connect("client".to_string(), "testserver".to_string())
-                    .await
-                {
-                    error!("Error handling client connection: {}", e);
-                }
+                    .await.expect("Error handling client connection");
                 
-                // TODO
+                let data_channel = connection.open_detached_channel("minecraft".to_string()).await.unwrap();
+
+                proxy_traffic(data_channel, stream).await.unwrap();
                 sleep(Duration::from_secs(2000)).await;
             }.instrument(info_span!("client_connection"))
         }
