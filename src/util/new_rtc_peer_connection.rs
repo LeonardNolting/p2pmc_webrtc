@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
+use tracing::{error, info};
 use webrtc::api::APIBuilder;
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
@@ -42,20 +43,21 @@ pub async fn create_peer_connection(certificate: RTCCertificate) -> anyhow::Resu
 
 /// Set the handler for Peer connection state
 /// This will notify you when the peer has connected/disconnected
+#[tracing::instrument(name = "peer_connection_state_change_listener")]
 pub(crate) fn setup_peer_connection_state_change_listener(peer_connection: &Arc<RTCPeerConnection>, done_tx: Sender<()>) {
     peer_connection.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
-        println!("Peer Connection State has changed: {s}");
+        info!("Peer Connection State has changed: {s}");
 
         if s == RTCPeerConnectionState::Failed {
             // Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
             // Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
             // Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
-            println!("Peer connection has failed, exiting");
+            error!("Peer connection has failed, exiting");
             let _ = done_tx.try_send(());
         }
 
         if s == RTCPeerConnectionState::Closed {
-            println!("Peer connection closed, exiting");
+            info!("Peer connection closed, exiting");
             let _ = done_tx.try_send(());
         }
 

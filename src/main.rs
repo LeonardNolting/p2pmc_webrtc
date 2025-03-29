@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use std::time::Duration;
 use crate::p2p::peer::Peer;
 use crate::p2p::peer_connection::PeerConnection;
 use crate::p2p::peer_connector::PeerConnector;
@@ -7,7 +7,9 @@ use crate::p2p::session::Session;
 use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use util::minecraft_connections::{connect_to_local_server, listen_for_minecraft_client_connections};
+use tokio::time::sleep;
+use tracing::{error, info, info_span, Instrument};
+use util::minecraft_connections::{connect_to_local_minecraft_server, listen_for_minecraft_client_connections};
 use util::response_manager::ResponseManager;
 use webrtc::peer_connection::certificate::RTCCertificate;
 
@@ -25,8 +27,8 @@ enum Command {
     Server {
         #[clap(long, default_value = "testserver")]
         id: String,
-        // #[clap(long, default_value = "localhost:3000")]
-        #[clap(long, default_value = "serveo.net:3001")]
+        #[clap(long, default_value = "localhost:3000")]
+        // #[clap(long, default_value = "serveo.net:3001")]
         minecraft_server: String,
         #[clap(long, default_value = "ws://34.75.203.169:5100")]
         signaling_server: String,
@@ -41,6 +43,26 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // construct a subscriber that prints formatted traces to stdout
+    let subscriber = tracing_subscriber::fmt()
+        .compact()
+        .with_thread_names(true)
+        // .with_span_events(FmtSpan::NEW)
+        // Display source code file paths
+        // .with_file(true)
+        // Display source code line numbers
+        // .with_line_number(true)
+        // Display the thread ID an event was recorded on
+        // .with_thread_ids(true)
+        // Don't display the event's target (module path)
+        .with_target(false)
+        // Build the subscriber
+        .finish();
+    // use that subscriber to process traces emitted after this point
+    tracing::subscriber::set_global_default(subscriber)?;
+    
+    info!("Jude running");
+    
     let cli = Cli::parse();
     match cli.command {
         Command::Server {
@@ -55,7 +77,9 @@ async fn main() -> Result<()> {
     }
 }
 
+#[tracing::instrument(name = "server")]
 async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str) -> Result<()> {
+    info!("Starting server proxy");
     let peer = Peer { id: id.to_string() };
 
     let mut session = Session::new(signaling_host.to_string()).await?;
@@ -69,7 +93,7 @@ async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str
             .open_detached_channel("minecraft".to_string())
             .await?;
 
-        let minecraft_stream = connect_to_local_server(minecraft_server).await;
+        let minecraft_stream = connect_to_local_minecraft_server(minecraft_server).await;
 
         proxy_traffic(data_channel, minecraft_stream).await?;
     }
@@ -77,7 +101,10 @@ async fn run_server_proxy(signaling_host: &str, id: &str, minecraft_server: &str
     Ok(())
 }
 
+#[tracing::instrument(name = "client")]
 async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
+    info!("Starting client proxy");
+    
     let peer = Peer { id: id.to_string() };
 
     let session = Arc::new(Session::new(signaling_host.to_string()).await?);
@@ -99,16 +126,20 @@ async fn run_client_proxy(signaling_host: &str, id: &str) -> Result<()> {
 
     listen_for_minecraft_client_connections("127.0.0.1:25565", {
         let session = session.clone();
-        move |stream, _| {
+        move |stream, addr| {
             let session = session.clone();
             async move {
+                info!("Minecraft client connected from {addr}");
                 if let Err(e) = session
                     .connect("client".to_string(), "testserver".to_string())
                     .await
                 {
-                    eprintln!("Error handling client connection: {}", e);
+                    error!("Error handling client connection: {}", e);
                 }
-            }
+                
+                // TODO
+                sleep(Duration::from_secs(2000)).await;
+            }.instrument(info_span!("client_connection"))
         }
     })
     .await;

@@ -12,6 +12,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, Utf8Bytes},
     MaybeTlsStream, WebSocketStream,
 };
+use tracing::{error, info, warn, Instrument};
 use crate::p2p::peer_connection::UnacceptedPeerConnection;
 use crate::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
 
@@ -24,7 +25,9 @@ pub struct Session {
 }
 
 impl Session {
+    #[tracing::instrument(name = "session_setup")]
     pub async fn new(server: String) -> Result<Self> {
+        info!("Starting session to signaling server at {server}");
         let (ws_stream, _) = tokio_tungstenite::connect_async(server.clone()).await?;
         let (sink, mut stream) = ws_stream.split();
 
@@ -59,30 +62,35 @@ impl Session {
                                             .set_remote_description(offer_sdp)
                                             .await
                                             .unwrap(); */
+                                        
+                                        info!(?offer, "Received offer from signaling server");
 
-                                        connection_sender.send(offer).await;
+                                        connection_sender.send(offer).await.unwrap();
                                     }
                                     "reply" => {
                                         let reply =
                                             serde_json::from_str::<OfferReply>(&text).unwrap();
+
+                                        info!(?reply, "Received reply from signaling server");
+                                        
                                         response_manager.handle_response(reply.number, reply).await;
                                     }
-                                    _ => eprintln!("Unsupported message type: {}", r#type),
+                                    r#type => error!(r#type, "Message was neither offer nor reply, was {}", r#type),
                                 }
                             }
                             Message::Close(_) => {
-                                println!("Signaling server closed WebSocket connection");
+                                info!("Received close frame from signaling server");
                                 break;
                             }
-                            message => println!("Unsupported message sent: {message}"),
+                            message => error!(%message, "Unsupported message type sent"),
                         },
                         Err(e) => {
-                            eprintln!("Error receiving message: {}", e);
+                            error!(%e, "Receiving message failed");
                         }
                     }
                 }
-                eprintln!("Disconnected from signaling server");
-            }
+                warn!("Disconnected from signaling server");
+            }.instrument(tracing::info_span!("listener"))
         });
 
         Ok(Self {
@@ -98,7 +106,9 @@ impl Session {
             "type": "register",
             "id": id,
         });
-        self.send_json(msg).await
+        let result = self.send_json(msg).await;
+        info!(?result, "Registered with signaling server as `{}`", id);
+        result
     }
 }
 
@@ -119,6 +129,7 @@ impl SignalingConnection for Session {
         &self.response_manager
     }
     async fn offer(&self, offer: OfferReply) -> Result<OfferReply> {
+        info!(?offer, "Sending offer to signaling server");
         let response_manager = self.get_response_manager();
         let response_receiver = response_manager.wait_for_response(offer.number).await;
 
@@ -130,6 +141,7 @@ impl SignalingConnection for Session {
         Ok(response)
     }
     async fn reply(&self, reply: OfferReply) -> Result<()> {
+        info!(?reply, "Sending reply to signaling server");
         let value = serde_json::to_value(&reply)?;
         self.send_json(value).await
         // self.send_offer_reply(reply).await

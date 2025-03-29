@@ -7,6 +7,7 @@ use anyhow::Result;
 use futures::channel;
 use rand::random;
 use tokio::sync::oneshot;
+use tracing::info;
 use webrtc::{
     data::data_channel::DataChannel,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
@@ -26,11 +27,13 @@ pub struct PeerConnection {
 
 /// Can be obtained by accepting an offer (listener) or by connecting (dialer)
 impl PeerConnection {
+    #[tracing::instrument(name = "peer_connect", skip(signaling_connection))]
     pub async fn connect<T: SignalingConnection>(
         id: PeerId,
         to: PeerId,
         signaling_connection: &T,
     ) -> Result<Self> {
+        info!("Connecting from `{id}` to `{to}`");
         let rtc_peer_connection = create_peer_connection(generate_certificate().await?).await?;
 
         let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -75,10 +78,13 @@ impl PeerConnection {
         Ok(peer_connection)
     }
 
+    #[tracing::instrument(name = "peer_accept", skip(signaling_connection))]
     pub async fn accept<T: SignalingConnection>(
         offer: OfferReply,
         signaling_connection: &T,
     ) -> Result<Self> {
+        info!(?offer, "Accepting peer connection offer");
+        
         let rtc_peer_connection = create_peer_connection(generate_certificate().await?).await?;
 
         let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
