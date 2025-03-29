@@ -1,6 +1,7 @@
 use std::io::Result;
 
 use tokio::net::TcpStream;
+use tracing::info;
 use url::Url;
 
 pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
@@ -13,12 +14,12 @@ pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<Strin
     });
     let mut domains: Vec<&str> = domain.split(".").collect();
     domains.reverse();
-    /* if domains.len() != 3 ||  domains[0] != "localhost" || domains[1] != "p2pmc" {
+     if domains.len() != 3 ||  domains[0] != "gg" || domains[1] != "jude" {
         // TODO is panic correct here?
         panic!("Couldn't read subdomain from URL, domains: {:?}", domains);
-    } */
+    } 
     let to_id = domains.last().unwrap().to_string();
-    println!("Parsed peer: {to_id}");
+    info!("Parsed server from domain: {to_id}");
     Ok(to_id)
 }
 
