@@ -32,7 +32,7 @@ pub async fn proxy_traffic(
         let mut buf = [0u8; 4096];
         loop {
             match tcp_read.read(&mut buf).await {
-                Ok(n) if n == 0 => break,
+                Ok(0) => break,
                 Ok(n) => {
                     if let Err(e) = data_channel.write(&Bytes::copy_from_slice(&buf[..n])).await {
                         eprintln!("Data channel write error: {}", e);
