@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Server" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="command" value="run --package p2pmc_webrtc --bin p2pmc_webrtc -- server" />
+    <option name="command" value="run --package p2pmc_webrtc --bin p2pmc_webrtc -- --id hyperpixel server" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
       <env name="RUST_LOG" value="p2pmc_webrtc=debug,tokio=info" />

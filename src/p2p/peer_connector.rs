@@ -11,7 +11,7 @@ pub trait PeerConnector<S: SignalingConnection> {
     async fn connect(&self, id: PeerId, to: PeerId) -> Result<PeerConnection> {
         PeerConnection::connect::<S>(id, to, self.get_signaling_connection()).await
     }
-    async fn accept(&mut self) -> Option<Offer> {
+    async fn receive(&mut self) -> Option<Offer> {
         self.get_connection_receiver().recv().await
     }
 }
