@@ -236,6 +236,10 @@ impl PeerConnection {
             data_channel.unwrap().detach().await.unwrap()
         }).await
     }
+    
+    pub async fn close(&self) -> webrtc::error::Result<()> {
+        self.peer_connection.close().await
+    }
 }
 
 pub type UnacceptedPeerConnection = Offer;
