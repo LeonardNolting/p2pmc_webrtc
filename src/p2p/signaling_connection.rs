@@ -16,9 +16,6 @@ impl<S: SignalingConnection> PeerConnector<S> for S {
     fn get_signaling_connection(&self) -> &S {
         self
     }
-    fn get_connection_receiver(&mut self) -> &mut mpsc::Receiver<UnacceptedPeerConnection> {
-        self.get_connection_receiver()
-    }
 }
 
 pub trait JsonCommunication {

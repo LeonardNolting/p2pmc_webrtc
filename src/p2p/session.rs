@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::p2p::offer_reply::{Offer, OfferReply, OfferReplyId, Reply};
@@ -14,27 +15,66 @@ use tokio::{
     net::TcpStream,
     sync::{mpsc, Mutex},
 };
+use tokio::sync::mpsc::Receiver;
 use tokio_tungstenite::{
     tungstenite::{Message, Utf8Bytes},
     MaybeTlsStream, WebSocketStream,
 };
 use tracing::{error, info, warn, Instrument};
+use crate::p2p::peer_connector::PeerConnector;
 
 type Packet = OfferReply;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Session {
     pub(crate) server: String,
     instances: Arc<RwLock<HashMap<PeerId, InstanceWriteHalf>>>,
     sink: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
 }
 
-#[derive(Debug)]
+/// Provides .receive()
+pub trait PeerListener<S: SignalingConnection> {
+    fn get_signaling_connection(&self) -> &S;
+    async fn get_connection_receiver(&mut self) -> &mut mpsc::Receiver<UnacceptedPeerConnection>;
+    async fn receive(&mut self) -> Option<Offer> {
+        self.get_connection_receiver().await.recv().await
+    }
+}
+
+pub struct InstanceListener {
+    pub instance: Instance,
+    response_manager: Arc<ResponseManager<OfferReplyId, OfferReply>>,
+}
+
+impl PeerListener<Session> for InstanceListener {
+    fn get_signaling_connection(&self) -> &Session {
+        self.instance
+    }
+
+    async fn get_connection_receiver(&mut self) -> &mut Receiver<UnacceptedPeerConnection> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Instance {
     pub id: String,
-    sink: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
-    response_manager: Arc<ResponseManager<OfferReplyId, OfferReply>>,
-    connection_receiver: mpsc::Receiver<UnacceptedPeerConnection>,
+    pub(crate) session: Session,
+}
+
+impl InstanceListener {
+}
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        let id = self.id.clone();
+        let session = self.session.clone();
+        tokio::spawn(async move {
+            if let Err(e) = session.deregister(&id).await {
+                error!(error = ?e, "Failed to deregister instance");
+            }
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -69,15 +109,20 @@ impl InstanceWriteHalf {
 impl Instance {
     async fn send_offer_reply(&self, offer_reply: OfferReply) -> Result<()> {
         let value = serde_json::to_value(&offer_reply)?;
-        self.sink.lock().await.send_json(value).await
+        self.session.sink.lock().await.send_json(value).await
     }
-
+    
     pub async fn accept(&self, offer: Offer) -> Result<PeerConnection> {
         PeerConnection::accept(offer, self).await
     }
 
-    pub async fn connect(&self, to: PeerId) -> Result<PeerConnection> {
-        PeerConnection::connect(self.id.clone(), to, self).await
+    async fn listener(&self) -> Result<InstanceListener> {
+        let (connection_sender, connection_receiver) = mpsc::channel(100);
+        let response_manager = Arc::new(ResponseManager::new());
+        Ok(InstanceListener {
+            instance: self,
+            
+        })
     }
 }
 
@@ -125,9 +170,13 @@ impl Session {
 
         Ok(Self {
             server,
-            instances: instances,
+            instances,
             sink: Arc::new(Mutex::new(sink)),
         })
+    }
+    
+    pub async fn listener(&self, id: String) -> Result<SessionListener> {
+        
     }
 
     pub async fn register(&self, id: String) -> Result<Instance> {
@@ -144,7 +193,7 @@ impl Session {
             id: id.clone(),
             response_manager: response_manager.clone(),
             connection_receiver,
-            sink: self.sink.clone(),
+            session: self.clone(),
         };
         self.instances.write().await.insert(
             id.clone(),
@@ -154,6 +203,11 @@ impl Session {
             },
         );
         Ok(instance)
+    }
+    
+    pub async fn deregister(&self, id: &String) -> Result<()> {
+        self.instances.write().await.remove(id);
+        Ok(())
     }
 }
 
@@ -167,8 +221,9 @@ impl JsonCommunication for SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>,
 }
 
 impl SignalingConnection for Instance {
-    fn get_connection_receiver(&mut self) -> &mut mpsc::Receiver<UnacceptedPeerConnection> {
-        &mut self.connection_receiver
+    async fn get_connection_receiver(&mut self) -> &mut mpsc::Receiver<UnacceptedPeerConnection> {
+        let test = &mut *self.connection_receiver.lock().await;
+        return test
     }
     fn get_response_manager(&self) -> &ResponseManager<OfferReplyId, Reply> {
         &self.response_manager
