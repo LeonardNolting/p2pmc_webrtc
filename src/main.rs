@@ -27,7 +27,7 @@ struct Cli {
     #[clap(
         short,
         long,
-        default_value = "ws://34.75.203.169:5100",
+        default_value = "ws://127.0.0.1:5100",
         help = "Signaling server URL"
     )]
     signaling_server: String,
