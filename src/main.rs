@@ -7,7 +7,6 @@ use crate::util::minecraft_listener::MinecraftListener;
 use crate::util::parse_server::parse_server;
 use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -15,74 +14,20 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, Instrument, Span};
 use util::response_manager::ResponseManager;
 use webrtc::peer_connection::certificate::RTCCertificate;
+use crate::cli::cli;
+use crate::util::logging::start_logger;
 
 mod p2p;
 mod util;
-
-#[derive(Parser)]
-struct Cli {
-    #[clap(short, long, help = "Identifier for this peer")]
-    id: String,
-    #[clap(
-        short,
-        long,
-        default_value = "ws://127.0.0.1:5100",
-        help = "Signaling server URL"
-    )]
-    signaling_server: String,
-
-    #[clap(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    Server {
-        #[clap(short, long, default_value = "127.0.0.1:3000")]
-        minecraft_server: String,
-    },
-    Client {
-        // Use 127.0.0.2 as this is less likely to be DNS filtered
-        #[clap(short, long, default_value = "127.0.0.2:25565")]
-        minecraft_adapter: String,
-    },
-}
-
-struct App {
-    session: Session,
-}
+mod cli;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // construct a subscriber that prints formatted traces to stdout
-    let subscriber = tracing_subscriber::fmt()
-        .compact()
-        .with_thread_names(true)
-        // Don't display the event's target (module path)
-        .with_target(false)
-        // Build the subscriber
-        .finish();
-    // use that subscriber to process traces emitted after this point
-    tracing::subscriber::set_global_default(subscriber)?;
+    start_logger()?;
 
-    let cli = Cli::parse();
-
-    let peer = Peer {
-        id: cli.id.to_string(),
-    };
-
-    info!(id = cli.id, "Starting jude as {}", cli.id);
-
-    let session = Arc::new(Session::new(cli.signaling_server.to_string()).await?);
-
-    match cli.command {
-        Command::Server { minecraft_server } => {
-            jude_server(cli.id, session, &minecraft_server).await
-        }
-        Command::Client { minecraft_adapter } => {
-            jude_client(cli.id, session, &minecraft_adapter).await
-        }
-    }
+    cli().await?;
+    
+    Ok(())
 }
 
 #[tracing::instrument(name = "server", skip(session, minecraft_server))]
@@ -121,7 +66,7 @@ async fn handle_offer(offer: Offer, session: &Session, minecraft_server: &str) -
 }
 
 #[tracing::instrument(name = "client", skip(session, minecraft_adapter))]
-async fn jude_client(id: PeerId, session: Arc<Session>, minecraft_adapter: &str) -> Result<()> {
+pub async fn jude_client(id: PeerId, session: Arc<Session>, minecraft_adapter: &str) -> Result<()> {
     info!(session.server, minecraft_adapter, "Starting client proxy");
     let listener = MinecraftListener::bind(minecraft_adapter)
         .await

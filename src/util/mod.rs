@@ -6,3 +6,4 @@ pub mod proxy_traffic;
 pub mod new_rtc_peer_connection;
 pub mod parse_server;
 pub mod minecraft_listener;
+pub mod logging;
