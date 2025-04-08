@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use crate::p2p::offer_reply::Offer;
 use crate::p2p::peer::{Peer, PeerId};
 use crate::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
@@ -130,34 +129,20 @@ async fn jude_client(id: PeerId, session: Arc<Session>, minecraft_adapter: &str)
 
     // Main client acceptance loop with proper error containment
     loop {
-        // Use tokio::select! to handle cancellation/cleanup
-        tokio::select! {
-            accept_result = listener.accept() => {
-                match accept_result {
-                    Ok((stream, addr)) => {
-                        let peer_id = id.clone();
-                        let session_clone = session.clone();
+        while let Ok((stream, addr)) = listener.accept().await {
+            let peer_id = id.clone();
+            let session_clone = session.clone();
 
-                        tokio::spawn(async move {
-                                let result = handle_connection(
-                                    stream,
-                                    addr,
-                                    peer_id,
-                                    &session_clone
-                                ).await;
+            tokio::spawn(
+                async move {
+                    let result = handle_connection(stream, addr, peer_id, &session_clone).await;
 
-                                if let Err(e) = result {
-                                    error!(error = ?e, "Client connection failed");
-                                }
-                            }.instrument(info_span!("client_session", client = ?addr)));
-                    }
-                    Err(e) => {
-                        error!(error = ?e, "Accept error, continuing listener");
-                        continue;
+                    if let Err(e) = result {
+                        error!(error = ?e, "Client connection failed");
                     }
                 }
-            }
-            // TODO graceful shutdown handling here
+                .instrument(info_span!("client_session", client = ?addr)),
+            );
         }
     }
 }
