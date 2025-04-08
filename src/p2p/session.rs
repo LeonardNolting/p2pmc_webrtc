@@ -18,6 +18,7 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 use tracing::{error, info, warn, Instrument};
+use crate::p2p::peer_connector::PeerListenerCreator;
 
 type Packet = OfferReply;
 
@@ -117,18 +118,11 @@ impl Session {
 
         Ok(session)
     }
+}
 
-    async fn register(&self, id: String) -> Result<()> {
-        let msg = serde_json::json!({
-            "type": "register",
-            "id": id,
-        });
-        let result = self.send_json(msg).await;
-        info!(?result, "Registered with signaling server as `{}`", id);
-        result
-    }
+impl PeerListenerCreator<Session> for Session {
 
-    pub async fn listener(&self, id: String) -> Result<PeerListener> {
+    async fn listener(&self, id: String) -> Result<PeerListener> {
         self.register(id.clone()).await?;
 
         let (connection_sender, connection_receiver) = mpsc::channel(100);
@@ -172,5 +166,15 @@ impl SignalingConnection for Session {
         let value = serde_json::to_value(&reply)?;
         self.send_json(value).await
         // self.send_offer_reply(reply).await
+    }
+
+    async fn register(&self, id: String) -> Result<()> {
+        let msg = serde_json::json!({
+            "type": "register",
+            "id": id,
+        });
+        let result = self.send_json(msg).await;
+        info!(?result, "Registered with signaling server as `{}`", id);
+        result
     }
 }

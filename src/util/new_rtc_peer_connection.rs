@@ -33,16 +33,16 @@ pub async fn create_peer_connection(
 
     let config = RTCConfiguration {
         ice_servers: vec![
-            /*RTCIceServer {
+            RTCIceServer {
                 urls: vec!["stun:stun.l.google.com:19302".to_owned()],
                 ..Default::default()
-            },*/
-            RTCIceServer {
+            },
+            /*RTCIceServer {
                 urls: vec!["turn:127.0.0.1:3478".to_owned()],
                 username: "dummy".to_owned(), // Not used but required by WebRTC
                 credential: "dummy".to_owned(),
                 ..Default::default()
-            },
+            },*/
         ],
         certificates: vec![certificate],
         ..Default::default()

@@ -8,7 +8,9 @@ use crate::p2p::offer_reply::Offer;
 pub trait PeerConnectionCreator<S: SignalingConnection> {
     fn get_signaling_connection(&self) -> &S;
     async fn connect(&self, id: PeerId, to: PeerId) -> Result<PeerConnection> {
-        PeerConnection::connect(id, to, self.get_signaling_connection()).await
+        let signaling_connection = self.get_signaling_connection();
+        signaling_connection.register(id.clone()).await?;
+        PeerConnection::connect(id, to, signaling_connection).await
     }
 
     async fn accept(&self, offer: Offer) -> Result<PeerConnection> {
@@ -17,5 +19,5 @@ pub trait PeerConnectionCreator<S: SignalingConnection> {
 }
 
 pub trait PeerListenerCreator<S: SignalingConnection> {
-    async fn listen(&self, id: PeerId) -> PeerListener;
+    async fn listener(&self, id: PeerId) -> Result<PeerListener>;
 }
