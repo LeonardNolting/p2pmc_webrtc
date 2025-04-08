@@ -7,6 +7,8 @@ use webrtc::peer_connection::certificate::RTCCertificate;
 mod util;
 mod cli;
 mod core;
+mod infra;
+mod crypto;
 
 #[tokio::main]
 async fn main() -> Result<()> {
