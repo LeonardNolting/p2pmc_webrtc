@@ -1,9 +1,10 @@
 use std::io::Result;
-
+use anyhow::bail;
 use tokio::net::TcpStream;
 use tracing::info;
 use url::Url;
 
+#[tracing::instrument(skip(stream))]
 pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
     let server_address = get_server_address(stream).await?;
     let domain = Url::parse(&server_address).map_or_else(|error| {
@@ -15,9 +16,8 @@ pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<Strin
     let mut domains: Vec<&str> = domain.split(".").collect();
     domains.reverse();
      if domains.len() != 3 ||  domains[0] != "gg" || domains[1] != "jude" {
-        // TODO is panic correct here?
-        panic!("Couldn't read subdomain from URL, domains: {:?}", domains);
-    } 
+        bail!("Couldn't read subdomain from URL, domains: {:?}", domains);
+    }
     let to_id = domains.last().unwrap().to_string();
     info!("Parsed server from domain: {to_id}");
     Ok(to_id)

@@ -8,7 +8,7 @@ use anyhow::Result;
 use futures::{channel, FutureExt};
 use rand::random;
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::{error, info};
 use webrtc::{
     data::data_channel::DataChannel,
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
@@ -19,11 +19,13 @@ use crate::p2p::offer_reply::OfferReply;
 use crate::p2p::signaling_connection::SignalingConnection;
 use crate::util::new_rtc_peer_connection::{create_peer_connection, setup_peer_connection_state_change_listener};
 
+#[derive(Clone)]
 pub struct PeerConnection {
     pub id: PeerId,
     pub to: PeerId,
     channel_response_manager: Arc<ResponseManager<String, Arc<RTCDataChannel>>>,
     pub peer_connection: Arc<RTCPeerConnection>,
+    pub default: Option<Arc<RTCDataChannel>>
 }
 
 /// Can be obtained by accepting an offer (listener) or by connecting (dialer)
@@ -42,7 +44,7 @@ impl PeerConnection {
         // Log changes to connection state
         setup_peer_connection_state_change_listener(&rtc_peer_connection, done_tx);
         
-        let peer_connection = Self::new(id.clone(), to.clone(), rtc_peer_connection.clone());
+        let mut peer_connection = Self::new(id.clone(), to.clone(), rtc_peer_connection.clone());
         
         // let default_channel_future = peer_connection.open_channel("default".to_string());
         let default_data_channel = peer_connection.create_reliable_data_channel("default").await?;
@@ -81,6 +83,7 @@ impl PeerConnection {
         
         // let _default_channel = default_channel_future.await?;
         Self::wait_for_data_channel_to_open(default_data_channel.clone()).await?;
+        peer_connection.default = Some(default_data_channel);
 
         Ok(peer_connection)
     }
@@ -99,7 +102,7 @@ impl PeerConnection {
         // Log changes to connection state
         setup_peer_connection_state_change_listener(&rtc_peer_connection, done_tx);
         
-        let peer_connection = Self::new(
+        let mut peer_connection = Self::new(
             offer.id.clone(),
             offer.to.clone(),
             rtc_peer_connection.clone(),
@@ -142,7 +145,7 @@ impl PeerConnection {
             })
             .await?;
         
-        let _default_channel = default_channel_future.await;
+        peer_connection.default = Some(default_channel_future.await.await?);
 
         Ok(peer_connection)
     }
@@ -168,6 +171,7 @@ impl PeerConnection {
             to,
             peer_connection,
             channel_response_manager,
+            default: None,
         }
     }
 
@@ -235,6 +239,21 @@ impl PeerConnection {
         data_channel.map(async |data_channel| {
             data_channel.unwrap().detach().await.unwrap()
         }).await
+    }
+    
+    pub async fn close(&self) -> webrtc::error::Result<()> {
+        self.peer_connection.close().await
+    }
+}
+
+impl Drop for PeerConnection {
+    fn drop(&mut self) {
+        let peer_connection = self.peer_connection.clone();
+        tokio::spawn(async move {
+            let _ = peer_connection.close().await.map_err(|e| {
+                error!(%e, "Closing PeerConnection failed");
+            });
+        });
     }
 }
 

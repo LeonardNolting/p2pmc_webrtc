@@ -1,9 +1,14 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::p2p::offer_reply::{OfferReply, OfferReplyId};
+use crate::p2p::offer_reply::{Offer, OfferReply, OfferReplyId};
+use crate::p2p::peer::PeerId;
+use crate::p2p::peer_connection::UnacceptedPeerConnection;
+use crate::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
 use crate::ResponseManager;
 use anyhow::Result;
 use futures::{stream::SplitSink, SinkExt, StreamExt};
+use tokio::sync::RwLock;
 use tokio::{
     net::TcpStream,
     sync::{mpsc, Mutex},
@@ -13,18 +18,55 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 use tracing::{error, info, warn, Instrument};
-use crate::p2p::peer_connection::UnacceptedPeerConnection;
-use crate::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
 
-pub struct Session {
-    server: String,
-    response_manager: Arc<ResponseManager<OfferReplyId, OfferReply>>,
+type Packet = OfferReply;
+
+pub struct PeerListener {
     connection_receiver: mpsc::Receiver<UnacceptedPeerConnection>,
+}
+
+impl PeerListener {
+    pub async fn receive(&mut self) -> Option<UnacceptedPeerConnection> {
+        self.connection_receiver.recv().await
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Session {
+    pub(crate) server: String,
+    connection_senders: Arc<RwLock<HashMap<PeerId, mpsc::Sender<UnacceptedPeerConnection>>>>,
+    response_manager: Arc<ResponseManager<OfferReplyId, OfferReply>>,
 
     sink: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
 }
 
 impl Session {
+    pub async fn handle_packet(&self, packet: Packet) -> Result<()> {
+        let connection_senders = self.connection_senders.read().await;
+        if let Some(connection_sender) = connection_senders.get(&packet.to) {
+            match packet.r#type.as_ref() {
+                "offer" => {
+                    info!(?packet, "Received offer from signaling server");
+                    connection_sender.send(packet).await?;
+                }
+                "reply" => {
+                    info!(?packet, "Received reply from signaling server");
+                    self.response_manager
+                        .handle_response(packet.number, packet)
+                        .await;
+                }
+                r#type => error!(
+                    r#type,
+                    "Message was neither offer nor reply, was {}", r#type
+                ),
+            }
+        } else {
+            warn!("Received offer_reply addressed to {}", &packet.to)
+        }
+
+        Ok(())
+    }
+
     #[tracing::instrument(name = "session_setup")]
     pub async fn new(server: String) -> Result<Self> {
         info!("Starting session to signaling server at {server}");
@@ -33,50 +75,29 @@ impl Session {
 
         let response_manager = Arc::new(ResponseManager::new());
 
-        let (connection_sender, connection_receiver) = mpsc::channel(100);
+        let connection_senders = Arc::new(RwLock::new(HashMap::<
+            PeerId,
+            mpsc::Sender<UnacceptedPeerConnection>,
+        >::new()));
+
+        let session = Self {
+            server,
+            response_manager,
+            connection_senders,
+            sink: Arc::new(Mutex::new(sink)),
+        };
 
         tokio::spawn({
-            let response_manager = response_manager.clone();
+            let session = session.clone();
             async move {
                 while let Some(message) = stream.next().await {
                     match message {
                         Ok(message) => match message {
                             Message::Text(text) => {
-                                let message: serde_json::Value =
-                                    serde_json::from_str(&text).unwrap();
-                                let r#type = message["type"].as_str().unwrap();
-                                match r#type {
-                                    "offer" => {
-                                        let offer: OfferReply =
-                                            serde_json::from_str::<OfferReply>(&text).unwrap();
-                                        /* let peer_connection = create_peer_connection(
-                                            generate_certificate().await.unwrap(),
-                                        )
-                                        .await
-                                        .unwrap();
-                                        let offer_sdp = serde_json::from_str::<RTCSessionDescription>(
-                                            &offer.description,
-                                        )
-                                        .unwrap();
-                                        peer_connection
-                                            .set_remote_description(offer_sdp)
-                                            .await
-                                            .unwrap(); */
-                                        
-                                        info!(?offer, "Received offer from signaling server");
-
-                                        connection_sender.send(offer).await.unwrap();
-                                    }
-                                    "reply" => {
-                                        let reply =
-                                            serde_json::from_str::<OfferReply>(&text).unwrap();
-
-                                        info!(?reply, "Received reply from signaling server");
-                                        
-                                        response_manager.handle_response(reply.number, reply).await;
-                                    }
-                                    r#type => error!(r#type, "Message was neither offer nor reply, was {}", r#type),
-                                }
+                                let offer_reply: OfferReply =
+                                    serde_json::from_str::<OfferReply>(&text).unwrap();
+                                info!(?offer_reply, "Received packet from signaling server");
+                                session.handle_packet(offer_reply).await.unwrap();
                             }
                             Message::Close(_) => {
                                 info!("Received close frame from signaling server");
@@ -90,18 +111,14 @@ impl Session {
                     }
                 }
                 warn!("Disconnected from signaling server");
-            }.instrument(tracing::info_span!("listener"))
+            }
+            .instrument(tracing::info_span!("listener"))
         });
 
-        Ok(Self {
-            server,
-            response_manager,
-            connection_receiver,
-            sink: Arc::new(Mutex::new(sink)),
-            // stream: Arc::new(Mutex::new(stream)),
-        })
+        Ok(session)
     }
-    pub async fn register(&self, id: String) -> Result<()> {
+
+    async fn register(&self, id: String) -> Result<()> {
         let msg = serde_json::json!({
             "type": "register",
             "id": id,
@@ -109,6 +126,19 @@ impl Session {
         let result = self.send_json(msg).await;
         info!(?result, "Registered with signaling server as `{}`", id);
         result
+    }
+
+    pub async fn listener(&self, id: String) -> Result<PeerListener> {
+        self.register(id.clone()).await?;
+
+        let (connection_sender, connection_receiver) = mpsc::channel(100);
+
+        let mut connection_senders = self.connection_senders.write().await;
+        connection_senders.insert(id, connection_sender);
+
+        Ok(PeerListener {
+            connection_receiver,
+        })
     }
 }
 
@@ -122,9 +152,6 @@ impl JsonCommunication for Session {
 }
 
 impl SignalingConnection for Session {
-    fn get_connection_receiver(&mut self) -> &mut mpsc::Receiver<UnacceptedPeerConnection> {
-        &mut self.connection_receiver
-    }
     fn get_response_manager(&self) -> &ResponseManager<OfferReplyId, OfferReply> {
         &self.response_manager
     }

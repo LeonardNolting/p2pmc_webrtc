@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tokio::sync::{oneshot, Mutex};
 
 // ResponseManager handles matching responses to their requests
+#[derive(Debug)]
 pub(crate) struct ResponseManager<I, T> {
     pending_requests: Mutex<HashMap<I, oneshot::Sender<T>>>
 }
