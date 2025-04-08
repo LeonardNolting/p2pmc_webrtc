@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::p2p::offer_reply::{Offer, OfferReply, OfferReplyId};
-use crate::p2p::peer::PeerId;
-use crate::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
-use crate::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
-use crate::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
+use crate::core::p2p::offer_reply::{Offer, OfferReply, OfferReplyId};
+use crate::core::p2p::peer::PeerId;
+use crate::core::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
+use crate::core::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
+use crate::core::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
 use crate::ResponseManager;
 use anyhow::Result;
 use futures::{stream::SplitSink, SinkExt, StreamExt};

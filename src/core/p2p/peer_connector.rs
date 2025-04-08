@@ -1,9 +1,9 @@
-use crate::p2p::peer::PeerId;
-use crate::p2p::peer_connection::PeerConnection;
-use crate::p2p::session::PeerListener;
-use crate::p2p::signaling_connection::SignalingConnection;
+use crate::core::p2p::peer::PeerId;
+use crate::core::p2p::peer_connection::PeerConnection;
+use crate::core::p2p::session::PeerListener;
+use crate::core::p2p::signaling_connection::SignalingConnection;
 use anyhow::Result;
-use crate::p2p::offer_reply::Offer;
+use crate::core::p2p::offer_reply::Offer;
 
 pub trait PeerConnectionCreator<S: SignalingConnection> {
     fn get_signaling_connection(&self) -> &S;

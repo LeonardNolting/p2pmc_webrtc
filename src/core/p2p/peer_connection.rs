@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::p2p::peer::PeerId;
+use crate::core::p2p::peer::PeerId;
 use crate::{generate_certificate, ResponseManager};
 use anyhow::anyhow;
 use anyhow::Result;
@@ -14,9 +14,9 @@ use webrtc::{
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
-use crate::p2p::offer_reply::Offer;
-use crate::p2p::offer_reply::OfferReply;
-use crate::p2p::signaling_connection::SignalingConnection;
+use crate::core::p2p::offer_reply::Offer;
+use crate::core::p2p::offer_reply::OfferReply;
+use crate::core::p2p::signaling_connection::SignalingConnection;
 use crate::util::new_rtc_peer_connection::{create_peer_connection, setup_peer_connection_state_change_listener};
 
 #[derive(Clone)]

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use tracing::info;
-use crate::{jude_client, jude_server};
-use crate::p2p::session::Session;
+use crate::core::p2p::session::Session;
+use crate::core::proxies::client::jude_client;
+use crate::core::proxies::server::jude_server;
 
 #[derive(Parser)]
 struct Cli {
@@ -17,7 +18,7 @@ struct Cli {
     signaling_server: String,
 
     #[clap(subcommand)]
-    command: crate::Command,
+    command: Command,
 }
 
 #[derive(Subcommand)]
@@ -34,17 +35,17 @@ enum Command {
 }
 
 pub async fn cli() -> anyhow::Result<()> {
-    let cli = crate::Cli::parse();
+    let cli = Cli::parse();
 
     info!(id = cli.id, "Starting jude as {}", cli.id);
 
     let session = Arc::new(Session::new(cli.signaling_server.to_string()).await?);
 
     match cli.command {
-        crate::Command::Server { minecraft_server } => {
+        Command::Server { minecraft_server } => {
             jude_server(cli.id, session, &minecraft_server).await
         }
-        crate::Command::Client { minecraft_adapter } => {
+        Command::Client { minecraft_adapter } => {
             jude_client(cli.id, session, &minecraft_adapter).await
         }
     }

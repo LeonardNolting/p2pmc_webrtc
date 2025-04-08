@@ -1,10 +1,10 @@
-use crate::p2p::offer_reply::{Offer, OfferReply, OfferReplyId, Reply};
-use crate::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
-use crate::p2p::peer_connector::PeerConnectionCreator;
+use crate::core::p2p::offer_reply::{Offer, OfferReply, OfferReplyId, Reply};
+use crate::core::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
+use crate::core::p2p::peer_connector::PeerConnectionCreator;
 use crate::ResponseManager;
 use anyhow::Result;
 use tokio::sync::mpsc;
-use crate::p2p::peer::PeerId;
+use crate::core::p2p::peer::PeerId;
 
 pub trait SignalingConnection: JsonCommunication {
     fn get_response_manager(&self) -> &ResponseManager<OfferReplyId, Reply>;
