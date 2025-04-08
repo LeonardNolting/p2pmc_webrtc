@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use crate::p2p::offer_reply::{Offer, OfferReply, OfferReplyId};
 use crate::p2p::peer::PeerId;
-use crate::p2p::peer_connection::UnacceptedPeerConnection;
+use crate::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
+use crate::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
 use crate::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
 use crate::ResponseManager;
 use anyhow::Result;
@@ -18,7 +19,6 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
 };
 use tracing::{error, info, warn, Instrument};
-use crate::p2p::peer_connector::PeerListenerCreator;
 
 type Packet = OfferReply;
 
@@ -43,26 +43,26 @@ pub struct Session {
 
 impl Session {
     pub async fn handle_packet(&self, packet: Packet) -> Result<()> {
-        let connection_senders = self.connection_senders.read().await;
-        if let Some(connection_sender) = connection_senders.get(&packet.to) {
-            match packet.r#type.as_ref() {
-                "offer" => {
+        match packet.r#type.as_ref() {
+            "offer" => {
+                let connection_senders = self.connection_senders.read().await;
+                if let Some(connection_sender) = connection_senders.get(&packet.to) {
                     info!(?packet, "Received offer from signaling server");
                     connection_sender.send(packet).await?;
+                } else {
+                    warn!("Received offer_reply addressed to {}", &packet.to)
                 }
-                "reply" => {
-                    info!(?packet, "Received reply from signaling server");
-                    self.response_manager
-                        .handle_response(packet.number, packet)
-                        .await;
-                }
-                r#type => error!(
-                    r#type,
-                    "Message was neither offer nor reply, was {}", r#type
-                ),
             }
-        } else {
-            warn!("Received offer_reply addressed to {}", &packet.to)
+            "reply" => {
+                info!(?packet, "Received reply from signaling server");
+                self.response_manager
+                    .handle_response(packet.number, packet)
+                    .await;
+            }
+            r#type => error!(
+                r#type,
+                "Message was neither offer nor reply, was {}", r#type
+            ),
         }
 
         Ok(())
@@ -121,7 +121,6 @@ impl Session {
 }
 
 impl PeerListenerCreator<Session> for Session {
-
     async fn listener(&self, id: String) -> Result<PeerListener> {
         self.register(id.clone()).await?;
 

@@ -1,5 +1,5 @@
 use crate::p2p::offer_reply::{Offer, OfferReply, OfferReplyId, Reply};
-use crate::p2p::peer_connection::UnacceptedPeerConnection;
+use crate::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
 use crate::p2p::peer_connector::PeerConnectionCreator;
 use crate::ResponseManager;
 use anyhow::Result;
