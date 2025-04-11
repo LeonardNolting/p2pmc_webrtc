@@ -9,20 +9,20 @@ use crate::core::p2p::session::Session;
 use crate::core::proxies::server::jude_server;
 use crate::infra::storage::{get_server, run_server};
 
-mod util;
-mod cli;
-mod core;
-mod infra;
-mod crypto;
+pub mod util;
+pub mod cli;
+pub mod core;
+pub mod infra;
+pub mod crypto;
 
-#[tokio::main]
+/*#[tokio::main]
 async fn main() -> Result<()> {
     start_logger()?;
 
     cli().await?;
     
     Ok(())
-}
+}*/
 
 pub async fn share_running_server(name: PeerId, session: Arc<Session>, address: &str) -> Result<()> {
     jude_server(name, session, address).await?;
