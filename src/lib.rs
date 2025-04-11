@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use crate::cli::cli;
 use crate::util::logging::start_logger;
 use anyhow::{Result};
 use util::response_manager::ResponseManager;

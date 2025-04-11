@@ -1,4 +1,4 @@
-use std::sync::Arc;
+/*use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use tracing::info;
 use crate::core::p2p::session::Session;
@@ -49,4 +49,4 @@ pub async fn cli() -> anyhow::Result<()> {
             jude_client(cli.id, session, &minecraft_adapter).await
         }
     }
-}
+}*/
