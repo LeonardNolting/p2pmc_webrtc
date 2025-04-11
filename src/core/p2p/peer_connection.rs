@@ -243,7 +243,7 @@ impl PeerConnection {
     pub async fn accept_channel_detached(&self, name: String) -> impl Future<Output = Arc<DataChannel>> + Send + 'static {
         let data_channel = self.accept_channel(name).await;
         
-        data_channel.map(async |data_channel| {
+        data_channel.map(async move |data_channel| {
             data_channel.unwrap().detach().await.unwrap()
         }).await
     }
