@@ -33,7 +33,7 @@ pub async fn jude_server(id: PeerId, session: Arc<Session>, minecraft_server: &s
 async fn handle_offer(offer: Offer, session: &Session, minecraft_server: &str) -> Result<()> {
     let mut peer_connection = session.accept(offer).await?;
 
-    let data_channel = peer_connection.default.take().unwrap().detach().await?;
+    let data_channel = peer_connection.primary.take().unwrap().detach().await?;
 
     let minecraft_stream = MinecraftConnector::connect(minecraft_server).await?;
 

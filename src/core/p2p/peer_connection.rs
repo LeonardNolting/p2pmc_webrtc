@@ -32,7 +32,7 @@ pub struct PeerConnection {
     pub to: PeerId,
     channel_response_manager: Arc<ResponseManager<String, Arc<RTCDataChannel>>>,
     pub peer_connection: Arc<RTCPeerConnection>,
-    pub default: Option<Arc<RTCDataChannel>>
+    pub primary: Option<Arc<RTCDataChannel>>
 }
 
 /// Can be obtained by accepting an offer (listener) or by connecting (dialer)
@@ -53,8 +53,8 @@ impl PeerConnection {
         
         let mut peer_connection = Self::new(id.clone(), to.clone(), rtc_peer_connection.clone());
         
-        // let default_channel_future = peer_connection.open_channel("default".to_string());
-        let default_data_channel = peer_connection.create_reliable_data_channel("default").await?;
+        // let primary_channel_future = peer_connection.open_channel("primary".to_string());
+        let primary_data_channel = peer_connection.create_reliable_data_channel("primary").await?;
 
         let offer = rtc_peer_connection.create_offer(None).await?;
 
@@ -88,9 +88,9 @@ impl PeerConnection {
         let answer = serde_json::from_str::<RTCSessionDescription>(&reply.description)?;
         rtc_peer_connection.set_remote_description(answer).await?;
         
-        // let _default_channel = default_channel_future.await?;
-        Self::wait_for_data_channel_to_open(default_data_channel.clone()).await?;
-        peer_connection.default = Some(default_data_channel);
+        // let _primary_channel = primary_channel_future.await?;
+        Self::wait_for_data_channel_to_open(primary_data_channel.clone()).await?;
+        peer_connection.primary = Some(primary_data_channel);
 
         Ok(peer_connection)
     }
@@ -115,7 +115,7 @@ impl PeerConnection {
             rtc_peer_connection.clone(),
         );
         
-        let default_channel_future = peer_connection.accept_channel("default".to_string());
+        let primary_channel_future = peer_connection.accept_channel("primary".to_string());
 
         // TODO just use RTCSessionDescription in OfferReply for automatic serialization and deserialization
         let description =
@@ -152,7 +152,7 @@ impl PeerConnection {
             })
             .await?;
         
-        peer_connection.default = Some(default_channel_future.await.await?);
+        peer_connection.primary = Some(primary_channel_future.await.await?);
 
         Ok(peer_connection)
     }
@@ -170,7 +170,7 @@ impl PeerConnection {
             })
         });
 
-        // TODO create default data channel for signaling
+        // TODO create primary data channel for signaling
         // and implement PeerConnector for PeerConnection
 
         Self {
@@ -178,7 +178,7 @@ impl PeerConnection {
             to,
             peer_connection,
             channel_response_manager,
-            default: None,
+            primary: None,
         }
     }
 

@@ -67,7 +67,7 @@ async fn handle_connection(
     /*let data_channel = connection.open_detached_channel("minecraft".to_string())
     .await
     .context("Failed to create data channel")?;*/
-    let data_channel = connection.default.take().unwrap().detach().await?;
+    let data_channel = connection.primary.take().unwrap().detach().await?;
 
     let cancel_token = CancellationToken::new();
     proxy_traffic(data_channel, stream, cancel_token.clone())
