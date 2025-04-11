@@ -39,9 +39,3 @@ pub async fn download_and_run_server(name: PeerId, session: Arc<Session>, addres
     
     Ok(())
 }
-
-pub async fn generate_certificate() -> Result<RTCCertificate> {
-    let keypair = rcgen::KeyPair::generate()?;
-    let cert = RTCCertificate::from_key_pair(keypair)?;
-    Ok(cert)
-}

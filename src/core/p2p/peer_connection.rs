@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::core::p2p::peer::PeerId;
-use crate::{generate_certificate, ResponseManager};
+use crate::{ResponseManager};
 use anyhow::anyhow;
 use anyhow::Result;
 use futures::{channel, FutureExt};
@@ -14,10 +14,17 @@ use webrtc::{
     data_channel::{data_channel_init::RTCDataChannelInit, RTCDataChannel},
     peer_connection::{sdp::session_description::RTCSessionDescription, RTCPeerConnection},
 };
+use webrtc::peer_connection::certificate::RTCCertificate;
 use crate::core::p2p::offer_reply::Offer;
 use crate::core::p2p::offer_reply::OfferReply;
 use crate::core::p2p::signaling_connection::SignalingConnection;
 use crate::util::new_rtc_peer_connection::{create_peer_connection, setup_peer_connection_state_change_listener};
+
+async fn generate_certificate() -> Result<RTCCertificate> {
+    let keypair = rcgen::KeyPair::generate()?;
+    let cert = RTCCertificate::from_key_pair(keypair)?;
+    Ok(cert)
+}
 
 #[derive(Clone)]
 pub struct PeerConnection {
