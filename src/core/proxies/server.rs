@@ -10,7 +10,7 @@ use crate::util::minecraft_connector::MinecraftConnector;
 use crate::util::proxy_traffic::proxy_traffic;
 
 #[tracing::instrument(name = "server", skip(session, minecraft_server))]
-pub async fn jude_server(id: PeerId, session: Arc<Session>, minecraft_server: &str) -> Result<()> {
+pub(crate) async fn jude_server(id: PeerId, session: Arc<Session>, minecraft_server: &str) -> Result<()> {
     info!(session.server, minecraft_server, "Starting jude server");
 
     let session = session;

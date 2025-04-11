@@ -22,18 +22,18 @@ use tracing::{error, info, warn, Instrument};
 
 type Packet = OfferReply;
 
-pub struct PeerListener {
+pub(crate) struct PeerListener {
     connection_receiver: mpsc::Receiver<UnacceptedPeerConnection>,
 }
 
 impl PeerListener {
-    pub async fn receive(&mut self) -> Option<UnacceptedPeerConnection> {
+    pub(crate) async fn receive(&mut self) -> Option<UnacceptedPeerConnection> {
         self.connection_receiver.recv().await
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Session {
+pub(crate) struct Session {
     pub(crate) server: String,
     connection_senders: Arc<RwLock<HashMap<PeerId, mpsc::Sender<UnacceptedPeerConnection>>>>,
     response_manager: Arc<ResponseManager<OfferReplyId, OfferReply>>,
@@ -42,7 +42,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub async fn handle_packet(&self, packet: Packet) -> Result<()> {
+    pub(crate) async fn handle_packet(&self, packet: Packet) -> Result<()> {
         match packet.r#type.as_ref() {
             "offer" => {
                 let connection_senders = self.connection_senders.read().await;
@@ -69,7 +69,7 @@ impl Session {
     }
 
     #[tracing::instrument(name = "session_setup")]
-    pub async fn new(server: String) -> Result<Self> {
+    pub(crate) async fn new(server: String) -> Result<Self> {
         info!("Starting session to signaling server at {server}");
         let (ws_stream, _) = tokio_tungstenite::connect_async(server.clone()).await?;
         let (sink, mut stream) = ws_stream.split();

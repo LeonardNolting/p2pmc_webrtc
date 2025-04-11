@@ -34,7 +34,7 @@ enum Command {
     },
 }
 
-pub async fn cli() -> anyhow::Result<()> {
+pub(crate) async fn cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     info!(id = cli.id, "Starting jude as {}", cli.id);

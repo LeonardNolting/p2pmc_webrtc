@@ -3,14 +3,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tracing::{info, instrument};
 
 #[derive(Debug)]
-pub struct MinecraftListener {
+pub(crate) struct MinecraftListener {
     inner: TcpListener,
 }
 
 impl MinecraftListener {
     /// Creates a new Minecraft listener bound to the specified address
     #[instrument]
-    pub async fn bind<A: tokio::net::ToSocketAddrs + std::fmt::Debug>(
+    pub(crate) async fn bind<A: tokio::net::ToSocketAddrs + std::fmt::Debug>(
         addr: A,
     ) -> tokio::io::Result<Self> {
         let inner = TcpListener::bind(&addr).await?;
@@ -19,7 +19,7 @@ impl MinecraftListener {
     }
 
     /// Accepts a new incoming connection with Minecraft-specific setup
-    pub async fn accept(&self) -> tokio::io::Result<(TcpStream, SocketAddr)> {
+    pub(crate) async fn accept(&self) -> tokio::io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.accept().await
             .map_err(|e| {
                 tracing::error!(error = ?e, "Failed accepting Minecraft connection");

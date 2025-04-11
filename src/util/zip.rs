@@ -54,7 +54,7 @@ where
     Ok(())
 }
 
-pub fn zip_dir(src_dir: &Path, dst_file: &Path, method: zip::CompressionMethod) -> anyhow::Result<()> {
+pub(crate) fn zip_dir(src_dir: &Path, dst_file: &Path, method: zip::CompressionMethod) -> anyhow::Result<()> {
     if !Path::new(src_dir).is_dir() {
         return Err(ZipError::FileNotFound.into());
     }
@@ -75,7 +75,7 @@ pub fn zip_dir(src_dir: &Path, dst_file: &Path, method: zip::CompressionMethod) 
     Ok(())
 }
 
-pub fn unzip_to_dir(archive_path: &Path, directory_path: &Path) -> anyhow::Result<()> {
+pub(crate) fn unzip_to_dir(archive_path: &Path, directory_path: &Path) -> anyhow::Result<()> {
     let file = File::open(archive_path).unwrap();
 
     let mut archive = zip::ZipArchive::new(file).unwrap();

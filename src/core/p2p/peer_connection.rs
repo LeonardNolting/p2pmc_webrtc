@@ -27,18 +27,18 @@ async fn generate_certificate() -> Result<RTCCertificate> {
 }
 
 #[derive(Clone)]
-pub struct PeerConnection {
-    pub id: PeerId,
-    pub to: PeerId,
+pub(crate) struct PeerConnection {
+    pub(crate) id: PeerId,
+    pub(crate) to: PeerId,
     channel_response_manager: Arc<ResponseManager<String, Arc<RTCDataChannel>>>,
-    pub peer_connection: Arc<RTCPeerConnection>,
-    pub primary: Option<Arc<RTCDataChannel>>
+    pub(crate) peer_connection: Arc<RTCPeerConnection>,
+    pub(crate) primary: Option<Arc<RTCDataChannel>>
 }
 
 /// Can be obtained by accepting an offer (listener) or by connecting (dialer)
 impl PeerConnection {
     #[tracing::instrument(name = "peer_connect", skip(signaling_connection))]
-    pub async fn connect<T: SignalingConnection>(
+    pub(crate) async fn connect<T: SignalingConnection>(
         id: PeerId,
         to: PeerId,
         signaling_connection: &T,
@@ -96,7 +96,7 @@ impl PeerConnection {
     }
 
     #[tracing::instrument(name = "peer_accept", skip(signaling_connection))]
-    pub async fn accept<T: SignalingConnection>(
+    pub(crate) async fn accept<T: SignalingConnection>(
         offer: OfferReply,
         signaling_connection: &T,
     ) -> Result<Self> {
@@ -197,7 +197,7 @@ impl PeerConnection {
             )
             .await?)
     }
-    pub async fn wait_for_data_channel_to_open(data_channel: Arc<RTCDataChannel>) -> Result<()> {
+    pub(crate) async fn wait_for_data_channel_to_open(data_channel: Arc<RTCDataChannel>) -> Result<()> {
         let (on_open_tx, on_open_rx) = channel::oneshot::channel();
         data_channel.on_open(Box::new(move || {
             let _ = on_open_tx.send(());
@@ -206,7 +206,7 @@ impl PeerConnection {
         on_open_rx.await?;
         Ok(())
     }
-    pub async fn open_channel(&self, name: String) -> Result<Arc<RTCDataChannel>> {
+    pub(crate) async fn open_channel(&self, name: String) -> Result<Arc<RTCDataChannel>> {
         let data_channel = self.create_reliable_data_channel(&name).await?;
 
         Self::wait_for_data_channel_to_open(data_channel.clone()).await?;
@@ -229,18 +229,18 @@ impl PeerConnection {
         Ok(data_channel.clone())
     }
 
-    pub async fn open_detached_channel(&self, name: String) -> Result<Arc<DataChannel>> {
+    pub(crate) async fn open_detached_channel(&self, name: String) -> Result<Arc<DataChannel>> {
         let data_channel = self.open_channel(name).await?;
 
         Ok(data_channel.detach().await?)
     }
 
-    pub async fn accept_channel(&self, name: String) -> oneshot::Receiver<Arc<RTCDataChannel>> {
+    pub(crate) async fn accept_channel(&self, name: String) -> oneshot::Receiver<Arc<RTCDataChannel>> {
         self.channel_response_manager.wait_for_response(name).await
     }
     
     // TODO is this right? why is .map awaited?
-    pub async fn accept_channel_detached(&self, name: String) -> impl Future<Output = Arc<DataChannel>> + Send + 'static {
+    pub(crate) async fn accept_channel_detached(&self, name: String) -> impl Future<Output = Arc<DataChannel>> + Send + 'static {
         let data_channel = self.accept_channel(name).await;
         
         data_channel.map(async move |data_channel| {
@@ -248,7 +248,7 @@ impl PeerConnection {
         }).await
     }
     
-    pub async fn close(&self) -> webrtc::error::Result<()> {
+    pub(crate) async fn close(&self) -> webrtc::error::Result<()> {
         self.peer_connection.close().await
     }
 }
@@ -264,4 +264,4 @@ impl Drop for PeerConnection {
     }
 }
 
-pub type UnacceptedPeerConnection = Offer;
+pub(crate) type UnacceptedPeerConnection = Offer;

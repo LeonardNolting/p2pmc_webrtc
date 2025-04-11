@@ -1,2 +1,2 @@
-pub mod p2p;
-pub mod proxies;
+pub(crate) mod p2p;
+pub(crate) mod proxies;

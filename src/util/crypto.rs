@@ -15,13 +15,13 @@ use webrtc::dtls::crypto::CryptoPrivateKey;
 use webrtc::peer_connection::certificate::RTCCertificate;
 use x509_parser::prelude::{FromDer, X509Certificate};
 
-pub fn get_certificate_expiry(cert: &CertificateDer<'static>) -> Result<SystemTime> {
+pub(crate) fn get_certificate_expiry(cert: &CertificateDer<'static>) -> Result<SystemTime> {
     let (_, parsed_cert) = X509Certificate::from_der(cert).ok().unwrap();
     let validity = parsed_cert.validity();
     Ok(SystemTime::from(validity.not_after.to_datetime()))
 }
 
-pub async fn parse_cert(cert: &[u8]) -> Result<Identity> {
+pub(crate) async fn parse_cert(cert: &[u8]) -> Result<Identity> {
     let (_rem, cert) = X509Certificate::from_der(cert)?;
 
     let age_public_key = cert.extensions().iter().find(|ext| {
@@ -34,7 +34,7 @@ pub async fn parse_cert(cert: &[u8]) -> Result<Identity> {
     Ok(Identity::from_str(age_public_key).unwrap())
 }
 
-pub async fn validate_is_peer(
+pub(crate) async fn validate_is_peer(
     peer: String,
     cert: &CertificateDer<'_>,
     root_cert: &CertificateDer<'_>,
@@ -61,7 +61,7 @@ pub async fn validate_is_peer(
     Ok(())
 }
 
-pub async fn load_user(user: String) -> Result<RTCCertificate> {
+pub(crate) async fn load_user(user: String) -> Result<RTCCertificate> {
     let user_certificate = read(format!("{}.cer", user)).await?;
     let cert: CertificateDer<'static> = user_certificate.into();
 
@@ -76,7 +76,7 @@ pub async fn load_user(user: String) -> Result<RTCCertificate> {
     }, expires))
 }
 
-pub async fn load_root() -> Result<CertifiedKey> {
+pub(crate) async fn load_root() -> Result<CertifiedKey> {
     let root_certificate = read("root.cer").await?;
     let root_private_key = read("root.key").await?;
     let root_age_key = read_to_string("root.age.key").await?;
@@ -97,7 +97,7 @@ pub async fn load_root() -> Result<CertifiedKey> {
     Ok(certified_key)
 }
 
-pub async fn create_root() -> Result<(CertifiedKey, Identity)> {
+pub(crate) async fn create_root() -> Result<(CertifiedKey, Identity)> {
     let age_key = Identity::generate();
 
     write(
@@ -116,7 +116,7 @@ pub async fn create_root() -> Result<(CertifiedKey, Identity)> {
     Ok((certified_key, age_key))
 }
 
-pub async fn create_root_certificate(age_public_key: Recipient) -> Result<CertifiedKey> {
+pub(crate) async fn create_root_certificate(age_public_key: Recipient) -> Result<CertifiedKey> {
     let mut params = CertificateParams::default();
 
     params
@@ -155,7 +155,7 @@ pub async fn create_root_certificate(age_public_key: Recipient) -> Result<Certif
     Ok(CertifiedKey { cert, key_pair })
 }
 
-pub async fn create_user(user: String, issuer: &CertifiedKey) -> Result<(CertifiedKey, Identity)> {
+pub(crate) async fn create_user(user: String, issuer: &CertifiedKey) -> Result<(CertifiedKey, Identity)> {
     let age_key = Identity::generate();
 
     write(
@@ -174,7 +174,7 @@ pub async fn create_user(user: String, issuer: &CertifiedKey) -> Result<(Certifi
     Ok((certified_key, age_key))
 }
 
-pub async fn create_user_certificate(
+pub(crate) async fn create_user_certificate(
     user: String,
     issuer: &CertifiedKey,
     age_public_key: Recipient,

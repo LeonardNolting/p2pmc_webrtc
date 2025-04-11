@@ -12,7 +12,7 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::RTCPeerConnection;
 
-pub async fn create_peer_connection(
+pub(crate) async fn create_peer_connection(
     certificate: RTCCertificate,
 ) -> anyhow::Result<Arc<RTCPeerConnection>> {
     let mut m = MediaEngine::default();

@@ -5,7 +5,7 @@ use crate::core::p2p::signaling_connection::SignalingConnection;
 use anyhow::Result;
 use crate::core::p2p::offer_reply::Offer;
 
-pub trait PeerConnectionCreator<S: SignalingConnection> {
+pub(crate) trait PeerConnectionCreator<S: SignalingConnection> {
     fn get_signaling_connection(&self) -> &S;
     async fn connect(&self, id: PeerId, to: PeerId) -> Result<PeerConnection> {
         let signaling_connection = self.get_signaling_connection();
@@ -18,6 +18,6 @@ pub trait PeerConnectionCreator<S: SignalingConnection> {
     }
 }
 
-pub trait PeerListenerCreator<S: SignalingConnection> {
+pub(crate) trait PeerListenerCreator<S: SignalingConnection> {
     async fn listener(&self, id: PeerId) -> Result<PeerListener>;
 }

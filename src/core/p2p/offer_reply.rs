@@ -1,15 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OfferReply {
-    pub r#type: String,
-    pub id: String,
-    pub to: String,
-    pub number: OfferReplyId,
-    pub description: String,
+pub(crate) struct OfferReply {
+    pub(crate) r#type: String,
+    pub(crate) id: String,
+    pub(crate) to: String,
+    pub(crate) number: OfferReplyId,
+    pub(crate) description: String,
 }
 
-pub type OfferReplyId = u32;
+pub(crate) type OfferReplyId = u32;
 
-pub type Offer = OfferReply;
-pub type Reply = OfferReply;
+pub(crate) type Offer = OfferReply;
+pub(crate) type Reply = OfferReply;
