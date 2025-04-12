@@ -12,8 +12,9 @@ use crate::util::parse_server::parse_server;
 use crate::util::proxy_traffic::proxy_traffic;
 
 #[tracing::instrument(name = "client", skip(session, minecraft_adapter))]
-pub async fn jude_client(id: PeerId, session: Arc<Session>, minecraft_adapter: &str) -> anyhow::Result<()> {
+pub async fn jude_client(id: PeerId, session: &Arc<Session>, minecraft_adapter: &str) -> anyhow::Result<()> {
     info!(session.server, minecraft_adapter, "Starting client proxy");
+    let session = Arc::clone(session);
     let listener = MinecraftListener::bind(minecraft_adapter)
         .await
         .context("Failed to bind Minecraft listener")?;
