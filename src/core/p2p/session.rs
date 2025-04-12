@@ -61,7 +61,7 @@ impl Session {
             }
             r#type => error!(
                 r#type,
-                "Message was neither offer nor reply, was {}", r#type
+                "Packet was neither offer nor reply, was {}", r#type
             ),
         }
 
@@ -97,7 +97,6 @@ impl Session {
                             Message::Text(text) => {
                                 let offer_reply: OfferReply =
                                     serde_json::from_str::<OfferReply>(&text).unwrap();
-                                info!(?offer_reply, "Received packet from signaling server");
                                 session.handle_packet(offer_reply).await.unwrap();
                             }
                             Message::Close(_) => {
