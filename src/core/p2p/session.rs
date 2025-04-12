@@ -69,7 +69,7 @@ impl Session {
     }
 
     #[tracing::instrument(name = "session_setup")]
-    pub async fn new(server: String) -> Result<Self> {
+    pub async fn new(server: String) -> Result<Arc<Session>> {
         info!("Starting session to signaling server at {server}");
         let (ws_stream, _) = tokio_tungstenite::connect_async(server.clone()).await?;
         let (sink, mut stream) = ws_stream.split();
@@ -116,7 +116,7 @@ impl Session {
             .instrument(tracing::info_span!("listener"))
         });
 
-        Ok(session)
+        Ok(Arc::new(session))
     }
 }
 
