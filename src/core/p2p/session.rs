@@ -6,7 +6,7 @@ use crate::core::p2p::peer::PeerId;
 use crate::core::p2p::peer_connection::{PeerConnection, UnacceptedPeerConnection};
 use crate::core::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
 use crate::core::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
-use crate::ResponseManager;
+use crate::util::response_manager::ResponseManager;
 use anyhow::Result;
 use futures::{stream::SplitSink, SinkExt, StreamExt};
 use tokio::sync::RwLock;
@@ -33,8 +33,8 @@ impl PeerListener {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Session {
-    pub(crate) server: String,
+pub struct Session {
+    pub server: String,
     connection_senders: Arc<RwLock<HashMap<PeerId, mpsc::Sender<UnacceptedPeerConnection>>>>,
     response_manager: Arc<ResponseManager<OfferReplyId, OfferReply>>,
 
@@ -42,7 +42,7 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) async fn handle_packet(&self, packet: Packet) -> Result<()> {
+    async fn handle_packet(&self, packet: Packet) -> Result<()> {
         match packet.r#type.as_ref() {
             "offer" => {
                 let connection_senders = self.connection_senders.read().await;
@@ -69,7 +69,7 @@ impl Session {
     }
 
     #[tracing::instrument(name = "session_setup")]
-    pub(crate) async fn new(server: String) -> Result<Self> {
+    pub async fn new(server: String) -> Result<Self> {
         info!("Starting session to signaling server at {server}");
         let (ws_stream, _) = tokio_tungstenite::connect_async(server.clone()).await?;
         let (sink, mut stream) = ws_stream.split();

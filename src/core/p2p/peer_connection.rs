@@ -2,7 +2,6 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::core::p2p::peer::PeerId;
-use crate::{ResponseManager};
 use anyhow::anyhow;
 use anyhow::Result;
 use futures::{channel, FutureExt};
@@ -19,6 +18,7 @@ use crate::core::p2p::offer_reply::Offer;
 use crate::core::p2p::offer_reply::OfferReply;
 use crate::core::p2p::signaling_connection::SignalingConnection;
 use crate::util::new_rtc_peer_connection::{create_peer_connection, setup_peer_connection_state_change_listener};
+use crate::util::response_manager::ResponseManager;
 
 async fn generate_certificate() -> Result<RTCCertificate> {
     let keypair = rcgen::KeyPair::generate()?;

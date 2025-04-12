@@ -1,4 +1,4 @@
-pub(crate) fn start_logger() -> anyhow::Result<()> {
+pub fn start_logger() -> anyhow::Result<()> {
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         .compact()
