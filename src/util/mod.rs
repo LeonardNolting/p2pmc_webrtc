@@ -6,5 +6,5 @@ pub(crate) mod proxy_traffic;
 pub(crate) mod new_rtc_peer_connection;
 pub(crate) mod parse_server;
 pub(crate) mod minecraft_listener;
-pub(crate) mod logging;
+pub mod logging;
 pub(crate) mod zip;
