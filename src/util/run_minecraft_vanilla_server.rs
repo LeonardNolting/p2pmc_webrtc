@@ -1,45 +1,44 @@
+use cancellable::cancellable;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tokio::fs;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{error, info, instrument};
 
-pub async fn run_minecraft_vanilla_server(server: &str, java: &str, port: u16) {
-    let server = Path::new(server);
+#[instrument(name = "minecraft_server", skip_all)]
+#[cancellable]
+pub async fn run_minecraft_vanilla_server(server: String, java: String, port: u16) {
+    info!(server, java, port, "Starting Minecraft server");
+
+    let server = Path::new(&server);
     let server_file = server.file_name().unwrap();
     let server_dir = server.parent().unwrap();
-    
-    info!("Server file: {server_file:?}");
-    info!("Server dir: {server_dir:?}");
 
-    let mut perms = fs::metadata(java).await.unwrap().permissions();
+    let mut perms = fs::metadata(&java).await.expect("Receiving metadata failed").permissions();
 
     // Add execute permission (equivalent to chmod +x)
     perms.set_mode(perms.mode() | 0o111);
 
     // Set the new permissions
-    fs::set_permissions(java, perms).await.unwrap();
+    fs::set_permissions(&java, perms).await.expect("Marking java binary as executable failed");
 
     // Create the command using relative paths
-    let status = Command::new(java)
-        .current_dir(server_dir)  // Change working directory before executing
+    let status = Command::new(&java)
+        .current_dir(server_dir) // Change working directory before executing
         .arg("-jar")
         .arg(server_file)
         .arg("nogui")
         .arg("-port")
         .arg(port.to_string())
-        .status().await.unwrap();
+        .kill_on_drop(true)
+        .status().await
+        .expect("Running java command failed");
 
-    /*// Create the command using relative paths
-    let status = Command::new("pwd")
-        .status().await.unwrap();*/
-    
-    println!("Minecraft server status: {status}");
+    info!("Minecraft server closed with status {status}");
 
     if status.success() {
-        println!("Minecraft server started successfully");
+        info!("Minecraft server closed successfully");
     } else {
-        eprintln!("Failed to start Minecraft server");
-        eprintln!("{}", status.code().unwrap().to_string());
+        error!(code = status.code().unwrap(), "Minecraft server execution ended unsuccessfully");
     }
 }
