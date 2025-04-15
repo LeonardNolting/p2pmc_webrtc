@@ -1,9 +1,24 @@
 use cancellable::cancellable;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+#[cfg(unix)]
 use tokio::fs;
+use std::path::Path;
 use tokio::process::Command;
 use tracing::{error, info, instrument};
+
+async fn mark_executable(path: &str) {
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&path).await.expect("Receiving metadata failed").permissions();
+
+        // Add execute permission (equivalent to chmod +x)
+        perms.set_mode(perms.mode() | 0o111);
+
+        // Set the new permissions
+        fs::set_permissions(&path, perms).await.expect("Marking java binary as executable failed");
+    }
+}
 
 #[instrument(name = "minecraft_server", skip_all)]
 #[cancellable]
@@ -14,13 +29,7 @@ pub async fn run_minecraft_vanilla_server(server: String, java: String, port: u1
     let server_file = server.file_name().unwrap();
     let server_dir = server.parent().unwrap();
 
-    let mut perms = fs::metadata(&java).await.expect("Receiving metadata failed").permissions();
-
-    // Add execute permission (equivalent to chmod +x)
-    perms.set_mode(perms.mode() | 0o111);
-
-    // Set the new permissions
-    fs::set_permissions(&java, perms).await.expect("Marking java binary as executable failed");
+    mark_executable(&java).await;
 
     // Create the command using relative paths
     let status = Command::new(&java)
