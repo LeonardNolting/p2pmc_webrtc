@@ -15,9 +15,9 @@ pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<Strin
     });
     let mut domains: Vec<&str> = domain.split(".").collect();
     domains.reverse();
-     if domains.len() != 3 ||  domains[0] != "gg" || domains[1] != "jude" {
+    /*if domains.len() != 3 ||  domains[0] != "gg" || domains[1] != "jude" {
         bail!("Couldn't read subdomain from URL, domains: {:?}", domains);
-    }
+    }*/
     let to_id = domains.last().unwrap().to_string();
     info!("Parsed server from domain: {to_id}");
     Ok(to_id)
