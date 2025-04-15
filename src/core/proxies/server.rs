@@ -1,24 +1,28 @@
-use std::sync::Arc;
-use crate::core::p2p::peer::PeerId;
-use crate::core::p2p::session::Session;
-use anyhow::Result;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
 use crate::core::p2p::offer_reply::Offer;
+use crate::core::p2p::peer::PeerId;
 use crate::core::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
+use crate::core::p2p::session::Session;
 use crate::util::minecraft_connector::MinecraftConnector;
 use crate::util::proxy_traffic::proxy_traffic;
+use cancellable::cancellable;
+use std::sync::Arc;
+pub use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 #[tracing::instrument(name = "server", skip(session, minecraft_server))]
-pub async fn jude_server(id: PeerId, session: &Arc<Session>, minecraft_server: &str) -> Result<()> {    
+#[cancellable]
+pub async fn jude_server(
+    id: PeerId,
+    session: Session,
+    minecraft_server: String,
+) -> anyhow::Result<()> {
     info!(session.server, minecraft_server, "Starting jude server");
-    let session = Arc::clone(session);
+    let session = session.clone();
 
-    let session = session;
     let mut listener = session.listener(id.to_string()).await?;
 
     while let Some(offer) = listener.receive().await {
-        let session = Arc::clone(&session);
+        let session = session.clone();
         let minecraft_server = minecraft_server.to_string();
         tokio::spawn(async move {
             let result = handle_offer(offer, &session, &minecraft_server).await;
@@ -31,7 +35,11 @@ pub async fn jude_server(id: PeerId, session: &Arc<Session>, minecraft_server: &
     Ok(())
 }
 
-async fn handle_offer(offer: Offer, session: &Session, minecraft_server: &str) -> Result<()> {
+async fn handle_offer(
+    offer: Offer,
+    session: &Session,
+    minecraft_server: &str,
+) -> anyhow::Result<()> {
     let mut peer_connection = session.accept(offer).await?;
 
     let data_channel = peer_connection.primary.take().unwrap().detach().await?;

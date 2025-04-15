@@ -1,20 +1,25 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use anyhow::Context;
-use tokio::net::TcpStream;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, Instrument, Span};
 use crate::core::p2p::peer::{Peer, PeerId};
 use crate::core::p2p::peer_connector::PeerConnectionCreator;
 use crate::core::p2p::session::Session;
 use crate::util::minecraft_listener::MinecraftListener;
 use crate::util::parse_server::parse_server;
 use crate::util::proxy_traffic::proxy_traffic;
+use anyhow::Context;
+use cancellable::cancellable;
+use std::net::SocketAddr;
+use tokio::net::TcpStream;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, info_span, Instrument, Span};
 
 #[tracing::instrument(name = "client", skip(session, minecraft_adapter))]
-pub async fn jude_client(id: PeerId, session: &Arc<Session>, minecraft_adapter: &str) -> anyhow::Result<()> {
+#[cancellable]
+pub async fn jude_client(
+    id: PeerId,
+    session: Session,
+    minecraft_adapter: String,
+) -> anyhow::Result<()> {
     info!(session.server, minecraft_adapter, "Starting client proxy");
-    let session = Arc::clone(session);
+    let session = session.clone();
     let listener = MinecraftListener::bind(minecraft_adapter)
         .await
         .context("Failed to bind Minecraft listener")?;
@@ -33,7 +38,7 @@ pub async fn jude_client(id: PeerId, session: &Arc<Session>, minecraft_adapter: 
                         error!(error = ?e, "Client connection failed");
                     }
                 }
-                    .instrument(info_span!("client_session", client = ?addr)),
+                .instrument(info_span!("client_session", client = ?addr)),
             );
         }
     }
