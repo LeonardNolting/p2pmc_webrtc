@@ -8,6 +8,7 @@ use crate::core::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreato
 use crate::core::p2p::signaling_connection::{JsonCommunication, SignalingConnection};
 use crate::util::response_manager::ResponseManager;
 use anyhow::Result;
+use flutter_rust_bridge::frb;
 use futures::{stream::SplitSink, SinkExt, StreamExt};
 use tokio::sync::RwLock;
 use tokio::{
@@ -32,7 +33,7 @@ impl PeerListener {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Session {
     pub server: String,
     connection_senders: Arc<RwLock<HashMap<PeerId, mpsc::Sender<UnacceptedPeerConnection>>>>,
@@ -41,7 +42,25 @@ pub struct Session {
     sink: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        info!("Session to {} was cancelled / dropped", self.server);
+    }
+}
+
 impl Session {
+    #[frb(sync)]
+    pub fn clone(&self) -> Session {
+        Session {
+            server: ::core::clone::Clone::clone(&self.server),
+            connection_senders: ::core::clone::Clone::clone(
+                &self.connection_senders,
+            ),
+            response_manager: ::core::clone::Clone::clone(&self.response_manager),
+            sink: ::core::clone::Clone::clone(&self.sink),
+        }
+    }
+
     async fn handle_packet(&self, packet: Packet) -> Result<()> {
         match packet.r#type.as_ref() {
             "offer" => {
@@ -69,7 +88,7 @@ impl Session {
     }
 
     #[tracing::instrument(name = "session_setup")]
-    pub async fn new(server: String) -> Result<Arc<Session>> {
+    pub async fn new(server: String) -> Result<Session> {
         info!("Starting session to signaling server at {server}");
         let (ws_stream, _) = tokio_tungstenite::connect_async(server.clone()).await?;
         let (sink, mut stream) = ws_stream.split();
@@ -115,7 +134,7 @@ impl Session {
             .instrument(tracing::info_span!("listener"))
         });
 
-        Ok(Arc::new(session))
+        Ok(session)
     }
 }
 
