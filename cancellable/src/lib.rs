@@ -60,15 +60,22 @@ pub fn cancellable(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #visibility fn #cancellable_name #generics (#params) -> tokio_util::sync::CancellationToken #where_clause {
             let token = tokio_util::sync::CancellationToken::new();
             let cloned_token = token.clone();
-            tokio::spawn(async move {
-                // Wait for either cancellation or a very long time
-                tokio::select! {
-                    _ = cloned_token.cancelled() => {}
-                    _ = async move {
-                        self::#fn_name(#(#param_names),*).await
-                    } => {}
-                }
+
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+
+                rt.block_on(async {
+                    // Wait for either cancellation or a very long time
+                    tokio::select! {
+                        _ = cloned_token.cancelled() => {}
+                        _ = self::#fn_name(#(#param_names),*) => {}
+                    }
+                });
             });
+
             token
         }
     };
