@@ -77,5 +77,5 @@ pub(crate) async fn load_user(user: String) -> Result<RTCCertificate> {
 }
 
 fn user_to_domain(user: &String) -> String {
-    format!("{}.users.p2pmc.internal", user)
+    format!("{}.users.jude.internal", user)
 }
