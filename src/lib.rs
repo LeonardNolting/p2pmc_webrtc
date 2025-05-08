@@ -1,6 +1,7 @@
 pub use crate::core::p2p::session;
 use flutter_rust_bridge::frb;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 // pub use crate::core::proxies::client::jude_client;
 // pub use crate::core::proxies::server::jude_server;
 pub use tokio_util::sync::CancellationToken;
@@ -14,6 +15,29 @@ pub use tokio::task::AbortHandle;
 #[frb(external)]
 impl AbortHandle {
     pub fn abort(&self) {}
+}
+
+async fn test3() -> String {
+    "test3".to_string()
+}
+async fn test2() -> Option<String> {
+    let cloned_token = CancellationToken::new();
+
+    let handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            // Wait for either cancellation or a very long time
+            tokio::select! {
+                        _ = cloned_token.cancelled() => None,
+                        value = test3() => Some(value)
+                    }
+        })
+    });
+    return handle.join().unwrap();
 }
 
 /*#[frb(sync)]
@@ -35,7 +59,7 @@ mod tests {
     use crate::session::Session;
     use crate::util::logging::start_logger;
     use crate::util::crypto;
-    
+
     #[tokio::test]
     async fn old_crypto_code() {
         // let (root_certified_key, root_age_key) = crypto::create_root().await.unwrap();
@@ -86,8 +110,8 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(10)).await;
             token.cancel();
         })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -95,15 +119,15 @@ mod tests {
         let token = run_minecraft_vanilla_server_cancellable(
             "/Users/leonardnolting/Documents/jude/servers/testserver/server.jar".to_owned(),
             "/Users/leonardnolting/Library/Application Support/gg.jude.jude/jude/java/jres/21/jdk-21.0.6+7-jre/Contents/Home/bin/java".to_owned(),
-            3000
+            3000,
         );
 
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             token.cancel();
         })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         /*tokio::task::spawn_blocking(async {
             let token = run_minecraft_vanilla_server_cancellable(

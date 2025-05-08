@@ -28,7 +28,7 @@ pub fn cancellable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let where_clause = &original_fn.sig.generics.where_clause;
 
     // Determine the return type
-    let _return_type = match &original_fn.sig.output {
+    let return_type = match &original_fn.sig.output {
         syn::ReturnType::Default => quote! { () },
         syn::ReturnType::Type(_, ty) => quote! { #ty },
     };
@@ -56,12 +56,10 @@ pub fn cancellable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let generated = quote! {
         #original_fn
 
-        /// flutter_rust_bridge:sync
-        #visibility fn #cancellable_name #generics (#params) -> tokio_util::sync::CancellationToken #where_clause {
-            let token = tokio_util::sync::CancellationToken::new();
+        #visibility fn #cancellable_name #generics (token: tokio_util::sync::CancellationToken, #params) -> Option<#return_type> #where_clause {
             let cloned_token = token.clone();
 
-            std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
@@ -70,13 +68,13 @@ pub fn cancellable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 rt.block_on(async {
                     // Wait for either cancellation or a very long time
                     tokio::select! {
-                        _ = cloned_token.cancelled() => {}
-                        _ = self::#fn_name(#(#param_names),*) => {}
+                        _ = cloned_token.cancelled() => None,
+                        value = self::#fn_name(#(#param_names),*) => Some(value)
                     }
-                });
+                })
             });
 
-            token
+            return handle.join().unwrap();
         }
     };
 
