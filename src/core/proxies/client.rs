@@ -22,6 +22,8 @@ impl CancellationToken {
     pub fn new() -> CancellationToken {}
     #[frb(sync)]
     pub fn cancel(&self) {}
+    #[frb(sync)]
+    pub fn clone(&self) -> Self {}
 }
 
 #[tracing::instrument(name = "client", skip(session, minecraft_adapter))]

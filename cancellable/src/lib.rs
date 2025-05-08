@@ -56,7 +56,9 @@ pub fn cancellable(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let generated = quote! {
         #original_fn
 
-        #visibility fn #cancellable_name #generics (token: tokio_util::sync::CancellationToken, #params) -> Option<#return_type> #where_clause {
+        // TODO make it return the value of the wrapped function
+        // -> Option<#return_type>
+        #visibility async fn #cancellable_name #generics (token: tokio_util::sync::CancellationToken, #params) -> Option<String> #where_clause {
             let cloned_token = token.clone();
 
             let handle = std::thread::spawn(move || {
@@ -69,12 +71,15 @@ pub fn cancellable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     // Wait for either cancellation or a very long time
                     tokio::select! {
                         _ = cloned_token.cancelled() => None,
-                        value = self::#fn_name(#(#param_names),*) => Some(value)
+                        value = self::#fn_name(#(#param_names),*) => Some(()) // Some(value)
                     }
                 })
             });
 
-            return handle.join().unwrap();
+            // return Some(handle.join().unwrap());
+            handle.join().unwrap();
+
+            return Some("test3".to_string());
         }
     };
 
