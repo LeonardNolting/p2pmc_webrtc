@@ -9,7 +9,6 @@ pub mod crypto;
 pub mod util;
 
 pub use tokio::task::AbortHandle;
-pub use tokio_util::sync::CancellationToken;
 
 #[frb(external)]
 impl AbortHandle {
@@ -26,29 +25,13 @@ pub fn cancel_cancellation_token(token: Arc<CancellationToken>) {
     token.cancel();
 }*/
 
-#[frb(external)]
-impl CancellationToken {
-    #[frb(sync)]
-    pub fn new() -> CancellationToken {}
-    #[frb(sync)]
-    pub fn cancel(&self) {}
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn test() {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::proxies::client::{jude_client, jude_client_cancellable};
-    use crate::core::proxies::server::{jude_server, jude_server_cancellable};
-    use crate::session::Session;
-    use crate::util::run_minecraft_vanilla_server::{
-        run_minecraft_vanilla_server, run_minecraft_vanilla_server_cancellable,
-    };
-    use std::sync::Arc;
-    use std::thread;
     use std::time::Duration;
+    use crate::session::Session;
     use crate::util::logging::start_logger;
     use crate::util::crypto;
     

@@ -7,9 +7,22 @@ use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::Context;
 use cancellable::cancellable;
 use std::net::SocketAddr;
+use flutter_rust_bridge::frb;
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, Instrument, Span};
+
+/// Generation of flutter_rust_bridge bindings only works when CancellationToken is here
+/// Don't ask why
+/// tested in: /src/lib.rs, /src/cancellation_token.rs, /src/core/proxies/cancellation_token.rs; always with pub modules etc.; works only here?
+/// Also tested adding a mirrored struct with #[frb(mirror(tokio_util::sync::CancellationToken))]
+#[frb(external)]
+impl CancellationToken {
+    #[frb(sync)]
+    pub fn new() -> CancellationToken {}
+    #[frb(sync)]
+    pub fn cancel(&self) {}
+}
 
 #[tracing::instrument(name = "client", skip(session, minecraft_adapter))]
 #[cancellable]
