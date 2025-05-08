@@ -9,7 +9,7 @@ use cancellable::cancellable;
 use std::net::SocketAddr;
 use flutter_rust_bridge::frb;
 use tokio::net::TcpStream;
-use tokio_util::sync::CancellationToken;
+pub use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, Instrument, Span};
 
 /// Generation of flutter_rust_bridge bindings only works when CancellationToken is here
