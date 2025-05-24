@@ -22,20 +22,15 @@ async fn mark_executable(path: &str) {
 
 #[instrument(name = "minecraft_server", skip_all)]
 #[cancellable]
-pub async fn run_minecraft_vanilla_server(server: String, java: String, port: u16) {
-    info!(server, java, port, "Starting Minecraft server");
-
-    let server = Path::new(&server);
-    let server_file = server.file_name().unwrap();
-    let server_dir = server.parent().unwrap();
+pub async fn run_minecraft_vanilla_server(directory: String, server_jar: String, java: String, port: u16) {
+    info!(directory, server_jar, java, port, "Starting Minecraft server");
 
     mark_executable(&java).await;
 
-    // Create the command using relative paths
     let status = Command::new(&java)
-        .current_dir(server_dir) // Change working directory before executing
+        .current_dir(directory) // Change working directory before executing
         .arg("-jar")
-        .arg(server_file)
+        .arg(server_jar)
         .arg("nogui")
         .arg("-port")
         .arg(port.to_string())
