@@ -9,6 +9,7 @@ pub use tokio_util::sync::CancellationToken;
 pub mod core;
 pub mod crypto;
 pub mod util;
+pub mod nbt;
 
 pub use tokio::task::AbortHandle;
 
