@@ -52,7 +52,9 @@ pub fn load_level_dat(path: String) -> LevelDat {
     let mut bytes = vec![];
     decoder.read_to_end(&mut bytes).unwrap();
 
-    fastnbt::from_bytes(&bytes).unwrap()
+    let data: LevelDat = fastnbt::from_bytes(&bytes).unwrap();
+    // println!("{:?}", data.data.other.keys().collect::<Vec<_>>());
+    data
 }
 
 pub fn overwrite_level_dat(data: &LevelDat, path: String) {
