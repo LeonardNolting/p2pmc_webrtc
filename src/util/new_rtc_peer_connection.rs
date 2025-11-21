@@ -43,6 +43,27 @@ pub(crate) async fn create_peer_connection(
                 credential: "dummy".to_owned(),
                 ..Default::default()
             },*/
+
+            RTCIceServer {
+                urls: vec!["turn:standard.relay.metered.ca:80".to_owned()],
+                username: "48c1aa0fb184480f8cf49f76".to_owned(),
+                credential: "oEyJaDELWRetgXeF".to_owned(),
+            },
+            RTCIceServer {
+                urls: vec!["turn:standard.relay.metered.ca:80?transport=tcp".to_owned()],
+                username: "48c1aa0fb184480f8cf49f76".to_owned(),
+                credential: "oEyJaDELWRetgXeF".to_owned(),
+            },
+            RTCIceServer {
+                urls: vec!["turn:standard.relay.metered.ca:443".to_owned()],
+                username: "48c1aa0fb184480f8cf49f76".to_owned(),
+                credential: "oEyJaDELWRetgXeF".to_owned(),
+            },
+            RTCIceServer {
+                urls: vec!["turns:standard.relay.metered.ca:443?transport=tcp".to_owned()],
+                username: "48c1aa0fb184480f8cf49f76".to_owned(),
+                credential: "oEyJaDELWRetgXeF".to_owned(),
+            },
         ],
         certificates: vec![certificate],
         ..Default::default()
