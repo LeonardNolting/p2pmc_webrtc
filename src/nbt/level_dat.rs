@@ -27,6 +27,7 @@ pub struct Data {
     pub spawn_y: i32,
     pub spawn_z: i32,
     pub level_name: String,
+    pub last_played: i64,
 
     #[serde(flatten)]
     other: HashMap<String, Value>,
