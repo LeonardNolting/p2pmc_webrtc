@@ -23,9 +23,9 @@ pub struct LevelDat {
 #[frb(dart_metadata=("freezed"))]
 pub struct Data {
     pub version: Version,
-    pub spawn_x: i32,
-    pub spawn_y: i32,
-    pub spawn_z: i32,
+    // pub spawn_x: Option<i32>,
+    // pub spawn_y: Option<i32>,
+    // pub spawn_z: Option<i32>,
     pub level_name: String,
     pub last_played: i64,
 
@@ -73,9 +73,9 @@ fn main() {
 
     let mut leveldat: LevelDat = fastnbt::from_bytes(&bytes).unwrap();
 
-    leveldat.data.spawn_x = 250;
-    leveldat.data.spawn_y = 200;
-    leveldat.data.spawn_z = 250;
+    // leveldat.data.spawn_x = Some(250);
+    // leveldat.data.spawn_y = Some(200);
+    // leveldat.data.spawn_z = Some(250);
 
     let new_bytes = fastnbt::to_bytes(&leveldat).unwrap();
     let outfile = std::fs::File::create("level.dat").unwrap();
