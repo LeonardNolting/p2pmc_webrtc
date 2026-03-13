@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use anyhow::Context;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use webrtc::data::data_channel::DataChannel;
@@ -36,17 +36,21 @@ pub(crate) async fn proxy_traffic(
         let data_channel = Arc::clone(&data_channel);
         let cancel_token = cancel_token.clone();
         tokio::spawn(async move {
-            let mut buf = [0u8; 4096];
+            let mut bytes_mut = Some(BytesMut::zeroed(4096));
             loop {
                 tokio::select! {
                     _ = cancel_token.cancelled() => break Ok(()),
-                    result = tcp_read.read(&mut buf) => {
+                    // result = tcp_read.read(&mut buf) => {
+                    result = tcp_read.read(bytes_mut.as_mut().unwrap()) => {
                         let n = result.context("Failed to read from TCP stream")?;
                         if n == 0 { // EOF
                             return Ok(());
                         }
-                        data_channel.write(&Bytes::copy_from_slice(&buf[..n])).await
+                        // data_channel.write(&Bytes::copy_from_slice(&buf[..n])).await
+                        let bytes = Bytes::from(bytes_mut.take().unwrap());
+                        data_channel.write(&bytes.slice(..n)).await
                             .context("Failed to write to data channel")?;
+                        bytes_mut = Some(bytes.try_into_mut().unwrap());
                     }
                 }
             }
