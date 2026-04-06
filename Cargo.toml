@@ -46,3 +46,10 @@ flutter_rust_bridge = "=2.9.0"
 # Taken from flutter_rust_bridge source crate boilerplate (in flutter project in /rust)
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[profile.dev]
+debug = "none"
+debug-assertions = false
+incremental = false
+opt-level = 3
+overflow-checks = false
