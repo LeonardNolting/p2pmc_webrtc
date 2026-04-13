@@ -1,24 +1,22 @@
-use std::io;
-use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs};
-use std::str::FromStr;
-use crate::core::p2p::offer_reply::Offer;
-use crate::core::p2p::peer::PeerId;
-use crate::core::p2p::peer_connector::{PeerConnectionCreator, PeerListenerCreator};
-use crate::core::p2p::session::Session;
-use crate::util::minecraft_connector::MinecraftConnector;
-use crate::util::proxy_traffic::proxy_traffic;
+use std::{
+    io,
+    net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
+    str::FromStr,
+    time::Duration,
+};
 use cancellable::cancellable;
-use std::sync::Arc;
-use std::time::Duration;
-use iroh::{Endpoint, EndpointAddr, SecretKey};
-use iroh::endpoint::{presets, Accepting, ToSocketAddr};
+use iroh::{
+    endpoint::{presets, Accepting},
+    Endpoint, EndpointAddr, SecretKey,
+};
 use iroh_tickets::endpoint::EndpointTicket;
 use n0_error::{bail_any, ensure_any, AnyError, StdResultExt};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::select;
-use tokio::time::timeout;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    select,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
 
 /// The ALPN for dumbpipe.
 ///
