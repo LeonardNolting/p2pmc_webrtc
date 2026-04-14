@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use pkarr::dns::rdata::{RData, TXT};
 use pkarr::dns::Name;
 use pkarr::{Client, Keypair, SignedPacket};
@@ -18,7 +19,7 @@ fn derive_keypair_from_name(name: &str) -> Keypair {
 ///
 /// Returns `Ok(())` immediately after the *first* successful publish.
 pub async fn publish_iroh_mapping(
-    client: Client, // Passed by value (it clones cheaply via internal Arc) for the background task
+    client: Arc<Client>, // TODO later: pass by value (it clones cheaply via internal Arc) for the background task
     name: String,
     ticket: String,
     cancel_token: CancellationToken,
@@ -48,6 +49,7 @@ pub async fn publish_iroh_mapping(
         .publish(&signed_packet, None)
         .await
         .map_err(|e| e.to_string())?;
+    info!("Successfully published ticket for '{}', public key: {}", name, keypair.public_key());
 
     // 3. Spawn the background republishing loop
     tokio::spawn(async move {
@@ -88,7 +90,7 @@ pub async fn publish_iroh_mapping(
 
 /// Looks up an Iroh ticket in the DHT associated with a human-readable name.
 pub async fn lookup_iroh_mapping(
-    client: Client,
+    client: Arc<Client>,
     name: String,
 ) -> Result<Option<String>, String> {
     let public_key = derive_keypair_from_name(&name).public_key();
@@ -98,7 +100,7 @@ pub async fn lookup_iroh_mapping(
         for record in packet.resource_records("_iroh") {
             if let RData::TXT(txt) = &record.rdata {
                 if let Ok(ticket) = String::try_from(txt.clone()) {
-                    info!("Found ticket for {}: {}", name, ticket);
+                    info!("Retrieved ticket for {}: {}", name, ticket);
                     return Ok(Some(ticket));
                 }
             }
