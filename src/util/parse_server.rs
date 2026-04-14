@@ -1,23 +1,32 @@
 use std::io::Result;
-use anyhow::bail;
+use anyhow::{bail, Context}; // Added Context for better error mapping
 use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration}; // Added for timeout logic
 use tracing::info;
 use url::Url;
 
 #[tracing::instrument(skip(stream))]
 pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
-    let server_address = get_server_address(stream).await?;
-    let domain = Url::parse(&server_address).map_or_else(|error| {
+    // Define the timeout duration (e.g., 2 seconds)
+    let handshake_timeout = Duration::from_millis(500);
+
+    // Wrap the async call in a timeout
+    // .await returns Result<anyhow::Result<String>, Elapsed>
+    // The first ? handles the timeout, the second handles the get_server_address result
+    let server_address = timeout(handshake_timeout, get_server_address(stream))
+        .await
+        .context("Handshake timed out")??;
+
+    let domain = Url::parse(&server_address).map_or_else(|_error| {
         server_address
     }, move |url| {
         let domain = url.domain().expect("The client connected not via a domain, can't read domain").to_string();
         domain
     });
+
     let mut domains: Vec<&str> = domain.split(".").collect();
     domains.reverse();
-    /*if domains.len() != 3 ||  domains[0] != "gg" || domains[1] != "jude" {
-        bail!("Couldn't read subdomain from URL, domains: {:?}", domains);
-    }*/
+
     let to_id = domains.last().unwrap().to_string();
     info!("Parsed server from domain: {to_id}");
     Ok(to_id)
