@@ -1,21 +1,23 @@
-use std::{
-    io,
-    net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
-    str::FromStr,
-    time::Duration,
-};
+use flutter_rust_bridge::frb;
 use iroh::{
     endpoint::{presets, Accepting},
     Endpoint, EndpointAddr, SecretKey,
 };
 use iroh_tickets::endpoint::EndpointTicket;
 use n0_error::{bail_any, ensure_any, AnyError, StdResultExt};
+use std::{
+    io,
+    net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
+    str::FromStr,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     select,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
+use webrtc::util::Conn;
 
 const ALPN: &[u8] = b"DUMBPIPEV0";
 const HANDSHAKE: [u8; 5] = *b"hello";
@@ -127,7 +129,7 @@ pub async fn connect_tcp(
     token: CancellationToken,
     ipv4_addr: Option<String>,
     addr: String,
-    ticket: String
+    ticket: String,
 ) -> n0_error::Result<()> {
     let ticket = EndpointTicket::from_str(&ticket).std_context("invalid ticket")?;
     let ipv4_addr = ipv4_addr.map(|s| s.parse::<SocketAddrV4>().expect("invalid ipv4 address"));
@@ -174,10 +176,7 @@ pub async fn connect_tcp(
             .std_context(format!("error opening bidi stream to {remote_endpoint_id}"))?;
 
         if handshake {
-            endpoint_send
-                .write_all(&HANDSHAKE)
-                .await
-                .anyerr()?;
+            endpoint_send.write_all(&HANDSHAKE).await.anyerr()?;
         }
         // Pass the token down to the stream handler
         forward_bidi(token, tcp_recv, tcp_send, endpoint_recv, endpoint_send).await?;
@@ -201,7 +200,9 @@ pub async fn connect_tcp(
         let token_clone = token.clone();
 
         tokio::spawn(async move {
-            if let Err(cause) = handle_tcp_accept(token_clone, next, addr, endpoint, handshake, &alpn).await {
+            if let Err(cause) =
+                handle_tcp_accept(token_clone, next, addr, endpoint, handshake, &alpn).await
+            {
                 tracing::warn!("error handling connection: {}", cause);
             }
         });
@@ -209,12 +210,18 @@ pub async fn connect_tcp(
     Ok(())
 }
 
-/// Listen on an endpoint and forward incoming connections to a tcp socket.
-pub async fn listen_tcp(
-    token: CancellationToken,
+#[frb(opaque)]
+pub struct ConnectionManager {
+    endpoint: Endpoint,
+    addrs: Vec<SocketAddr>,
+    ticket: EndpointTicket,
+    host: String,
+}
+
+pub async fn create_connection_manager(
+    host: String,
     ipv4_addr: Option<String>,
-    host: String
-) -> n0_error::Result<()> {
+) -> n0_error::Result<ConnectionManager> {
     let ipv4_addr = ipv4_addr.map(|s| s.parse::<SocketAddrV4>().expect("invalid ipv4 address"));
     let addrs = match host.to_socket_addrs() {
         Ok(addrs) => addrs.collect::<Vec<_>>(),
@@ -242,6 +249,22 @@ pub async fn listen_tcp(
             .next()
             .map_or("None".to_string(), |url| url.to_string())
     );
+
+    Ok(ConnectionManager {
+        endpoint,
+        addrs,
+        host,
+        ticket,
+    })
+}
+
+/// Listen on an endpoint and forward incoming connections to a tcp socket.
+pub async fn listen_tcp(token: CancellationToken, connection_manager: ConnectionManager) {
+    // 2. Clone variables needed for the background task
+    let loop_endpoint = connection_manager.endpoint.clone();
+    let loop_token = token.clone();
+    let loop_addrs = connection_manager.addrs.clone();
+    let loop_host = connection_manager.host.clone();
 
     async fn handle_endpoint_accept(
         token: CancellationToken,
@@ -271,32 +294,41 @@ pub async fn listen_tcp(
         Ok(())
     }
 
+    eprintln!("Forwarding incoming requests to '{}'.", loop_host);
+
     loop {
-        // Wait for incoming endpoint connections or external cancellation
-        let incoming = select! {
-            incoming = endpoint.accept() => incoming,
-            _ = token.cancelled() => {
+        let incoming = tokio::select! {
+            incoming = loop_endpoint.accept() => incoming,
+            _ = loop_token.cancelled() => {
                 tracing::info!("cancellation requested, stopping endpoint listener");
                 break;
             }
         };
+
         let Some(incoming) = incoming else {
             break;
         };
         let Ok(connecting) = incoming.accept() else {
             break;
         };
-        let addrs = addrs.clone();
-        let handshake = !false;
-        let token_clone = token.clone();
 
+        let inner_addrs = loop_addrs.clone();
+        let inner_token = loop_token.clone();
+
+        // Re-use your existing logic for handling individual streams
         tokio::spawn(async move {
-            if let Err(cause) = handle_endpoint_accept(token_clone, connecting, addrs, handshake).await {
+            if let Err(cause) =
+                handle_endpoint_accept(inner_token, connecting, inner_addrs, true).await
+            {
                 tracing::warn!("error handling connection: {}", cause);
             }
         });
     }
-    Ok(())
+}
+
+#[frb(sync)]
+pub fn connection_manager_get_ticket_string(connection_manager: &ConnectionManager) -> String {
+    connection_manager.ticket.to_string()
 }
 
 fn create_short_ticket(addr: &EndpointAddr) -> EndpointTicket {
