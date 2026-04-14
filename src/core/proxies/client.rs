@@ -66,7 +66,7 @@ async fn handle_connection(
     addr: SocketAddr,
     peer_id: PeerId,
 ) -> anyhow::Result<()> {
-    let peer = Peer {
+    /*let peer = Peer {
         id: peer_id.to_string(),
     };
 
@@ -83,11 +83,11 @@ async fn handle_connection(
         .expect("Ticket is not published");
     info!("CONNECTION STARTED {}, ticket={}", addr, ticket);
 
-    connect_tcp(cancel_token.clone(), None, , ticket).await?;
+    connect_tcp(cancel_token.clone(), None, addr.to_string(), ticket).await?;
 
     error!("CONNECTION STOPPED {}", addr);
 
-    cancel_token.cancel();
+    cancel_token.cancel();*/
 
     Ok(())
 }
