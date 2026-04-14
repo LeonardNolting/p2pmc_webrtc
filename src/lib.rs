@@ -11,6 +11,7 @@ pub mod crypto;
 pub mod util;
 pub mod nbt;
 pub mod dumbpipe;
+pub mod dht;
 
 pub use tokio::task::AbortHandle;
 
