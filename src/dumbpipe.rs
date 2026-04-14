@@ -4,7 +4,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-use cancellable::cancellable;
 use iroh::{
     endpoint::{presets, Accepting},
     Endpoint, EndpointAddr, SecretKey,
@@ -18,26 +17,10 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// The ALPN for dumbpipe.
-///
-/// It is basically just passing data through 1:1, except that the connecting
-/// side will send a fixed size handshake to make sure the stream is created.
 const ALPN: &[u8] = b"DUMBPIPEV0";
-
-/// The handshake to send when connecting.
-///
-/// The side that calls open_bi() first must send this handshake, the side that
-/// calls accept_bi() must consume it.
 const HANDSHAKE: [u8; 5] = *b"hello";
-
 const ONLINE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Copy from a reader to a noq stream.
-///
-/// Will send a reset to the other side if the operation is cancelled, and fail
-/// with an error.
-///
-/// Returns the number of bytes copied in case of success.
 async fn copy_to_noq(
     mut from: impl AsyncRead + Unpin,
     mut send: noq::SendStream,
@@ -51,19 +34,12 @@ async fn copy_to_noq(
             Ok(size)
         }
         _ = token.cancelled() => {
-            // send a reset to the other side immediately
             send.reset(0u8.into()).ok();
             Err(io::Error::other("cancelled"))
         }
     }
 }
 
-/// Copy from a noq stream to a writer.
-///
-/// Will send stop to the other side if the operation is cancelled, and fail
-/// with an error.
-///
-/// Returns the number of bytes copied in case of success.
 async fn copy_from_noq(
     mut recv: noq::RecvStream,
     mut to: impl AsyncWrite + Unpin,
@@ -80,9 +56,6 @@ async fn copy_from_noq(
     }
 }
 
-/// Get the secret key or generate a new one.
-///
-/// Print the secret key to stderr if it was generated, so the user can save it.
 fn get_or_create_secret() -> n0_error::Result<SecretKey> {
     match std::env::var("IROH_SECRET") {
         Ok(secret) => SecretKey::from_str(&secret).std_context("invalid secret"),
@@ -97,7 +70,6 @@ fn get_or_create_secret() -> n0_error::Result<SecretKey> {
     }
 }
 
-/// Create a new iroh endpoint.
 async fn create_endpoint(
     secret_key: SecretKey,
     ipv4_addr: Option<SocketAddrV4>,
@@ -109,9 +81,6 @@ async fn create_endpoint(
     if let Some(addr) = ipv4_addr {
         builder = builder.bind_addr(addr)?;
     }
-    // if let Some(addr) = common.ipv6_addr {
-    //     builder = builder.bind_addr(addr)?;
-    // }
     let endpoint = builder.bind().await.anyerr()?;
     Ok(endpoint)
 }
@@ -124,39 +93,42 @@ fn cancel_token<T>(token: CancellationToken) -> impl Fn(T) -> T {
 }
 
 /// Bidirectionally forward data from a noq stream and an arbitrary tokio
-/// reader/writer pair, aborting both sides when either one forwarder is done,
-/// or when control-c is pressed.
+/// reader/writer pair. Ties to the global token via a child token.
 async fn forward_bidi(
+    global_token: CancellationToken,
     from1: impl AsyncRead + Send + Sync + Unpin + 'static,
     to1: impl AsyncWrite + Send + Sync + Unpin + 'static,
     from2: noq::RecvStream,
     to2: noq::SendStream,
 ) -> n0_error::Result<()> {
-    let token1 = CancellationToken::new();
-    let token2 = token1.clone();
-    let token3 = token1.clone();
+    // Create a child token. If the global_token is cancelled, this cancels.
+    // If we cancel this manually, it does NOT cancel the global_token.
+    let local_token = global_token.child_token();
+    let token_for_stdout = local_token.clone();
+
     let forward_from_stdin = tokio::spawn(async move {
-        copy_to_noq(from1, to2, token1.clone())
+        copy_to_noq(from1, to2, local_token.clone())
             .await
-            .map_err(cancel_token(token1))
+            .map_err(cancel_token(local_token))
     });
     let forward_to_stdout = tokio::spawn(async move {
-        copy_from_noq(from2, to1, token2.clone())
+        copy_from_noq(from2, to1, token_for_stdout.clone())
             .await
-            .map_err(cancel_token(token2))
+            .map_err(cancel_token(token_for_stdout))
     });
-    let _control_c = tokio::spawn(async move {
-        tokio::signal::ctrl_c().await?;
-        token3.cancel();
-        io::Result::Ok(())
-    });
+
     forward_to_stdout.await.anyerr()?.anyerr()?;
     forward_from_stdin.await.anyerr()?.anyerr()?;
     Ok(())
 }
 
 /// Listen on a tcp port and forward incoming connections to an endpoint.
-pub async fn connect_tcp(ipv4_addr: Option<String>, addr: String, ticket: String) -> n0_error::Result<()> {
+pub async fn connect_tcp(
+    token: CancellationToken,
+    ipv4_addr: Option<String>,
+    addr: String,
+    ticket: String
+) -> n0_error::Result<()> {
     let ticket = EndpointTicket::from_str(&ticket).std_context("invalid ticket")?;
     let ipv4_addr = ipv4_addr.map(|s| s.parse::<SocketAddrV4>().expect("invalid ipv4 address"));
     let addrs = addr
@@ -168,7 +140,6 @@ pub async fn connect_tcp(ipv4_addr: Option<String>, addr: String, ticket: String
         .std_context("unable to bind endpoint")?;
     tracing::info!("tcp listening on {:?}", addrs);
 
-    // Wait for our own endpoint to be ready before trying to connect.
     if (timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
         eprintln!("Warning: Failed to connect to the home relay");
     }
@@ -180,7 +151,9 @@ pub async fn connect_tcp(ipv4_addr: Option<String>, addr: String, ticket: String
             return Ok(());
         }
     };
+
     async fn handle_tcp_accept(
+        token: CancellationToken,
         next: io::Result<(tokio::net::TcpStream, SocketAddr)>,
         addr: EndpointAddr,
         endpoint: Endpoint,
@@ -199,26 +172,25 @@ pub async fn connect_tcp(ipv4_addr: Option<String>, addr: String, ticket: String
             .open_bi()
             .await
             .std_context(format!("error opening bidi stream to {remote_endpoint_id}"))?;
-        // send the handshake unless we are using a custom alpn
-        // when using a custom alpn, everything is up to the user
+
         if handshake {
-            // the connecting side must write first. we don't know if there will be something
-            // on stdin, so just write a handshake.
             endpoint_send
                 .write_all(&HANDSHAKE)
                 .await
                 .anyerr()?;
         }
-        forward_bidi(tcp_recv, tcp_send, endpoint_recv, endpoint_send).await?;
+        // Pass the token down to the stream handler
+        forward_bidi(token, tcp_recv, tcp_send, endpoint_recv, endpoint_send).await?;
         Ok::<_, AnyError>(())
     }
+
     let addr = ticket.endpoint_addr();
     loop {
-        // also wait for ctrl-c here so we can use it before accepting a connection
+        // Wait for connection or external cancellation
         let next = tokio::select! {
             stream = tcp_listener.accept() => stream,
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("got ctrl-c, exiting");
+            _ = token.cancelled() => {
+                tracing::info!("cancellation requested, stopping tcp listener");
                 break;
             }
         };
@@ -226,11 +198,10 @@ pub async fn connect_tcp(ipv4_addr: Option<String>, addr: String, ticket: String
         let addr = addr.clone();
         let handshake = !false;
         let alpn = ALPN.to_vec();
+        let token_clone = token.clone();
+
         tokio::spawn(async move {
-            if let Err(cause) = handle_tcp_accept(next, addr, endpoint, handshake, &alpn).await {
-                // log error at warn level
-                //
-                // we should know about it, but it's not fatal
+            if let Err(cause) = handle_tcp_accept(token_clone, next, addr, endpoint, handshake, &alpn).await {
                 tracing::warn!("error handling connection: {}", cause);
             }
         });
@@ -239,7 +210,11 @@ pub async fn connect_tcp(ipv4_addr: Option<String>, addr: String, ticket: String
 }
 
 /// Listen on an endpoint and forward incoming connections to a tcp socket.
-pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Result<()> {
+pub async fn listen_tcp(
+    token: CancellationToken,
+    ipv4_addr: Option<String>,
+    host: String
+) -> n0_error::Result<()> {
     let ipv4_addr = ipv4_addr.map(|s| s.parse::<SocketAddrV4>().expect("invalid ipv4 address"));
     let addrs = match host.to_socket_addrs() {
         Ok(addrs) => addrs.collect::<Vec<_>>(),
@@ -247,23 +222,17 @@ pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Re
     };
     let secret_key = get_or_create_secret()?;
     let endpoint = create_endpoint(secret_key, ipv4_addr, vec![ALPN.to_vec()]).await?;
-    // wait for the endpoint to figure out its address before making a ticket
+
     if (timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
         eprintln!("Warning: Failed to connect to the home relay");
     }
     let addr = endpoint.addr();
-    let short = create_short_ticket(&addr);
-    let ticket = EndpointTicket::new(addr);
+    let ticket = EndpointTicket::new(addr.clone());
 
-    // print the ticket on stderr so it doesn't interfere with the data itself
-    //
-    // note that the tests rely on the ticket being the last thing printed
     eprintln!("Forwarding incoming requests to '{}'.", host);
     eprintln!("To connect, use e.g.:");
     eprintln!("dumbpipe connect-tcp {ticket}");
-    // if args.common.verbose > 0 {
-    //     eprintln!("or:\ndumbpipe connect-tcp {short}");
-    // }
+
     tracing::info!("endpoint id is {}", ticket.endpoint_addr().id);
     tracing::info!(
         "relay url is {:?}",
@@ -274,8 +243,8 @@ pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Re
             .map_or("None".to_string(), |url| url.to_string())
     );
 
-    // handle a new incoming connection on the endpoint
     async fn handle_endpoint_accept(
+        token: CancellationToken,
         accepting: Accepting,
         addrs: Vec<std::net::SocketAddr>,
         handshake: bool,
@@ -289,7 +258,6 @@ pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Re
             .std_context("error accepting stream")?;
         tracing::info!("accepted bidi stream from {}", remote_endpoint_id);
         if handshake {
-            // read the handshake and verify it
             let mut buf = [0u8; HANDSHAKE.len()];
             r.read_exact(&mut buf).await.anyerr()?;
             ensure_any!(buf == HANDSHAKE, "invalid handshake");
@@ -298,15 +266,17 @@ pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Re
             .await
             .std_context(format!("error connecting to {addrs:?}"))?;
         let (read, write) = connection.into_split();
-        forward_bidi(read, write, r, s).await?;
+        // Pass the token down to the stream handler
+        forward_bidi(token, read, write, r, s).await?;
         Ok(())
     }
 
     loop {
+        // Wait for incoming endpoint connections or external cancellation
         let incoming = select! {
             incoming = endpoint.accept() => incoming,
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("got ctrl-c, exiting");
+            _ = token.cancelled() => {
+                tracing::info!("cancellation requested, stopping endpoint listener");
                 break;
             }
         };
@@ -318,11 +288,10 @@ pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Re
         };
         let addrs = addrs.clone();
         let handshake = !false;
+        let token_clone = token.clone();
+
         tokio::spawn(async move {
-            if let Err(cause) = handle_endpoint_accept(connecting, addrs, handshake).await {
-                // log error at warn level
-                //
-                // we should know about it, but it's not fatal
+            if let Err(cause) = handle_endpoint_accept(token_clone, connecting, addrs, handshake).await {
                 tracing::warn!("error handling connection: {}", cause);
             }
         });
@@ -330,7 +299,6 @@ pub async fn listen_tcp(ipv4_addr: Option<String>, host: String) -> n0_error::Re
     Ok(())
 }
 
-/// Creates a ticket that only includes the id and any relay urls
 fn create_short_ticket(addr: &EndpointAddr) -> EndpointTicket {
     let mut short = EndpointAddr::new(addr.id);
     for relay_url in addr.relay_urls() {
