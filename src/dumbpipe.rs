@@ -11,6 +11,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+use std::sync::Arc;
 use anyhow::Context;
 use pkarr::Client;
 use tokio::{
@@ -178,7 +179,7 @@ pub async fn connect_tcp(
         let (tcp_recv, tcp_send) = tcp_stream.into_split();
         tracing::info!("got tcp connection from {}", tcp_addr);
 
-        let ticket = lookup_iroh_mapping(Client::builder().build()?, server)
+        let ticket = lookup_iroh_mapping(Arc::new(Client::builder().build()?), server)
             .await
             .expect("Failed to lookup ticket")
             .expect("Ticket is not published");
