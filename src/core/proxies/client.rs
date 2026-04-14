@@ -1,13 +1,16 @@
 use crate::core::p2p::peer::{Peer, PeerId};
 use crate::core::p2p::peer_connector::PeerConnectionCreator;
 use crate::core::p2p::session::Session;
+use crate::dht::lookup_iroh_mapping;
+use crate::dumbpipe::connect_tcp;
 use crate::util::minecraft_listener::MinecraftListener;
 use crate::util::parse_server::parse_server;
 use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::Context;
 use cancellable::cancellable;
-use std::net::SocketAddr;
 use flutter_rust_bridge::frb;
+use pkarr::Client;
+use std::net::SocketAddr;
 use tokio::net::TcpStream;
 pub use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, Instrument, Span};
@@ -26,15 +29,10 @@ impl CancellationToken {
     pub fn clone(&self) -> Self {}
 }
 
-#[tracing::instrument(name = "client", skip(session, minecraft_adapter))]
+#[tracing::instrument(name = "client", skip(minecraft_adapter))]
 #[cancellable]
-pub async fn jude_client(
-    id: PeerId,
-    session: Session,
-    minecraft_adapter: String,
-) -> anyhow::Result<()> {
-    info!(session.server, minecraft_adapter, "Starting client proxy");
-    let session = session.clone();
+pub async fn jude_client(id: PeerId, minecraft_adapter: String) -> anyhow::Result<()> {
+    info!(minecraft_adapter, "Starting client proxy");
     let listener = MinecraftListener::bind(minecraft_adapter)
         .await
         .context("Failed to bind Minecraft listener")?;
@@ -43,11 +41,10 @@ pub async fn jude_client(
     loop {
         while let Ok((stream, addr)) = listener.accept().await {
             let peer_id = id.clone();
-            let session_clone = session.clone();
 
             tokio::spawn(
                 async move {
-                    let result = handle_connection(stream, addr, peer_id, &session_clone).await;
+                    let result = handle_connection(stream, addr, peer_id).await;
 
                     if let Err(e) = result {
                         error!(error = ?e, "Client connection failed");
@@ -61,14 +58,13 @@ pub async fn jude_client(
 
 #[tracing::instrument(
     name = "handle_connection",
-    skip(stream, session, peer_id),
+    skip(stream, peer_id),
     fields(client = ?addr, server = tracing::field::Empty)
 )]
 async fn handle_connection(
     mut stream: TcpStream,
     addr: SocketAddr,
     peer_id: PeerId,
-    session: &Session,
 ) -> anyhow::Result<()> {
     let peer = Peer {
         id: peer_id.to_string(),
@@ -80,20 +76,16 @@ async fn handle_connection(
 
     Span::current().record("server", &server);
 
-    let mut connection = session
-        .connect(peer_id, server)
-        .await
-        .context("Failed to establish WebRTC connection")?;
-
-    /*let data_channel = connection.open_detached_channel("minecraft".to_string())
-    .await
-    .context("Failed to create data channel")?;*/
-    let data_channel = connection.primary.take().unwrap().detach().await?;
-
     let cancel_token = CancellationToken::new();
-    proxy_traffic(data_channel, stream, cancel_token.clone())
+    let ticket = lookup_iroh_mapping(Client::builder().build()?, server)
         .await
-        .context("Proxy traffic failed")?;
+        .expect("Failed to lookup ticket")
+        .expect("Ticket is not published");
+    info!("CONNECTION STARTED {}, ticket={}", addr, ticket);
+
+    connect_tcp(cancel_token.clone(), None, , ticket).await?;
+
+    error!("CONNECTION STOPPED {}", addr);
 
     cancel_token.cancel();
 
