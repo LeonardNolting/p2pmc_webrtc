@@ -11,13 +11,18 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+use anyhow::Context;
+use pkarr::Client;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     select,
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::{info, info_span, Instrument};
 use webrtc::util::Conn;
+use crate::dht::lookup_iroh_mapping;
+use crate::util::parse_server::parse_server;
 
 const ALPN: &[u8] = b"DUMBPIPEV0";
 const HANDSHAKE: [u8; 5] = *b"hello";
@@ -125,13 +130,12 @@ async fn forward_bidi(
 }
 
 /// Listen on a tcp port and forward incoming connections to an endpoint.
+#[tracing::instrument(name = "connect_tcp")]
 pub async fn connect_tcp(
     token: CancellationToken,
     ipv4_addr: Option<String>,
     addr: String,
-    ticket: String,
 ) -> n0_error::Result<()> {
-    let ticket = EndpointTicket::from_str(&ticket).std_context("invalid ticket")?;
     let ipv4_addr = ipv4_addr.map(|s| s.parse::<SocketAddrV4>().expect("invalid ipv4 address"));
     let addrs = addr
         .to_socket_addrs()
@@ -154,17 +158,33 @@ pub async fn connect_tcp(
         }
     };
 
+    #[tracing::instrument(
+        name = "connect_tcp_handle_tcp_accept",
+        skip(token, next, endpoint, handshake, alpn),
+    )]
     async fn handle_tcp_accept(
         token: CancellationToken,
         next: io::Result<(tokio::net::TcpStream, SocketAddr)>,
-        addr: EndpointAddr,
         endpoint: Endpoint,
         handshake: bool,
         alpn: &[u8],
-    ) -> n0_error::Result<()> {
-        let (tcp_stream, tcp_addr) = next.std_context("error accepting tcp connection")?;
+    ) -> anyhow::Result<()> {
+        let (mut tcp_stream, tcp_addr) = next.std_context("error accepting tcp connection")?;
+
+        let server = parse_server(&mut tcp_stream)
+            .await
+            .context("Failed to parse Minecraft server")?;
+
         let (tcp_recv, tcp_send) = tcp_stream.into_split();
         tracing::info!("got tcp connection from {}", tcp_addr);
+
+        let ticket = lookup_iroh_mapping(Client::builder().build()?, server)
+            .await
+            .expect("Failed to lookup ticket")
+            .expect("Ticket is not published");
+        let ticket = EndpointTicket::from_str(&ticket).std_context("invalid ticket")?;
+        let addr = ticket.endpoint_addr().to_owned();
+
         let remote_endpoint_id = addr.id;
         let connection = endpoint
             .connect(addr, alpn)
@@ -180,11 +200,15 @@ pub async fn connect_tcp(
         }
         // Pass the token down to the stream handler
         forward_bidi(token, tcp_recv, tcp_send, endpoint_recv, endpoint_send).await?;
-        Ok::<_, AnyError>(())
+        Ok(())
     }
 
-    let addr = ticket.endpoint_addr();
+    let mut connection_counter = 0;
+
     loop {
+        connection_counter += 1;
+        let connection_number = connection_counter;
+        info!("Connection {} starting...", connection_number);
         // Wait for connection or external cancellation
         let next = tokio::select! {
             stream = tcp_listener.accept() => stream,
@@ -194,18 +218,17 @@ pub async fn connect_tcp(
             }
         };
         let endpoint = endpoint.clone();
-        let addr = addr.clone();
         let handshake = !false;
         let alpn = ALPN.to_vec();
         let token_clone = token.clone();
 
         tokio::spawn(async move {
             if let Err(cause) =
-                handle_tcp_accept(token_clone, next, addr, endpoint, handshake, &alpn).await
+                handle_tcp_accept(token_clone, next, endpoint, handshake, &alpn).await
             {
                 tracing::warn!("error handling connection: {}", cause);
             }
-        });
+        }.instrument(info_span!("connect_tcp_connection", number = ?connection_number)));
     }
     Ok(())
 }
@@ -259,6 +282,7 @@ pub async fn create_connection_manager(
 }
 
 /// Listen on an endpoint and forward incoming connections to a tcp socket.
+#[tracing::instrument(name = "listen_tcp", skip(token, connection_manager))]
 pub async fn listen_tcp(token: CancellationToken, connection_manager: ConnectionManager) {
     // 2. Clone variables needed for the background task
     let loop_endpoint = connection_manager.endpoint.clone();
@@ -266,6 +290,10 @@ pub async fn listen_tcp(token: CancellationToken, connection_manager: Connection
     let loop_addrs = connection_manager.addrs.clone();
     let loop_host = connection_manager.host.clone();
 
+    #[tracing::instrument(
+        name = "listen_tcp_handle_endpoint_accept",
+        skip(token, accepting, addrs, handshake),
+    )]
     async fn handle_endpoint_accept(
         token: CancellationToken,
         accepting: Accepting,
@@ -322,7 +350,7 @@ pub async fn listen_tcp(token: CancellationToken, connection_manager: Connection
             {
                 tracing::warn!("error handling connection: {}", cause);
             }
-        });
+        }.instrument(info_span!("listen_tcp_connection")));
     }
 }
 
