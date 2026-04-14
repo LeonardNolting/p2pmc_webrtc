@@ -4,6 +4,7 @@ use pkarr::{Client, Keypair, SignedPacket};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 /// Deterministically derives an Ed25519 Keypair from an arbitrary string.
 fn derive_keypair_from_name(name: &str) -> Keypair {
@@ -97,6 +98,7 @@ pub async fn lookup_iroh_mapping(
         for record in packet.resource_records("_iroh") {
             if let RData::TXT(txt) = &record.rdata {
                 if let Ok(ticket) = String::try_from(txt.clone()) {
+                    info!("Found ticket for {}: {}", name, ticket);
                     return Ok(Some(ticket));
                 }
             }
