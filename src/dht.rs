@@ -23,18 +23,17 @@ pub async fn publish_iroh_mapping(
     name: String,
     ticket: String,
     cancel_token: CancellationToken,
-    ttl_seconds: Option<u32>,
+    dns_ttl: Option<u32>,
     interval_seconds: Option<u64>,
 ) -> Result<(), String> {
-    // Kademlia DHT nodes generally drop records after 2 hours.
-    // We default to a 2-hour TTL and a 1-hour republish interval.
-    let ttl = ttl_seconds.unwrap_or(7200);
+    let ttl = dns_ttl.unwrap_or(1);
+
     let interval = Duration::from_secs(interval_seconds.unwrap_or(3600));
 
     let keypair = derive_keypair_from_name(&name);
 
-    // 1. Create the initial packet
-    // FIX: Use explicit TryFrom calls and convert the String to a &str
+    // Create and sign the packet once
+    // This bakes the current timestamp into the sequence number.
     let signed_packet = SignedPacket::builder()
         .txt(
             Name::try_from("_iroh").map_err(|e| e.to_string())?,
@@ -44,14 +43,14 @@ pub async fn publish_iroh_mapping(
         .sign(&keypair)
         .map_err(|e| e.to_string())?;
 
-    // 2. Publish immediately so the caller knows it worked at least once
     client
         .publish(&signed_packet, None)
         .await
         .map_err(|e| e.to_string())?;
     info!("Successfully published ticket for '{}', public key: {}, value: {}", name, keypair.public_key(), ticket.as_str());
 
-    // 3. Spawn the background republishing loop
+    let packet_to_republish = signed_packet.clone();
+
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -62,23 +61,14 @@ pub async fn publish_iroh_mapping(
                 }
                 // Or wait for the interval to pass
                 _ = tokio::time::sleep(interval) => {
-                    // Rebuild and resign the packet (updates the timestamp)
-                    // FIX: Apply the same TryFrom and .as_str() logic here
-                    let packet_update = SignedPacket::builder()
-                        .txt(
-                            Name::try_from("_iroh").expect("Failed to parse Name"),
-                            TXT::try_from(ticket.as_str()).expect("Failed to parse TXT"),
-                            ttl
-                        )
-                        .sign(&keypair)
-                        .expect("Failed to sign packet in background task");
-
-                    if let Err(e) = client.publish(&packet_update, None).await {
-                        // In a real app, you might want to log this to a file or tracing subscriber,
-                        // rather than crashing the background thread.
+                    // FIX: We publish the EXACT SAME packet. We DO NOT rebuild or resign.
+                    // This keeps the record alive on the DHT without bumping the sequence
+                    // number, which prevents it from accidentally overwriting future mutations!
+                    // TODO check if this works even when the packet timestamp is not updated? 10 hour check?
+                    if let Err(e) = client.publish(&packet_to_republish, None).await {
                         eprintln!("Background republish failed for {}: {}", name, e);
                     } else {
-                        println!("Successfully republished '{}'", name);
+                        println!("Successfully republished '{}' to keep it alive on DHT", name);
                     }
                 }
             }
