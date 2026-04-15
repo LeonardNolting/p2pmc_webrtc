@@ -10,3 +10,4 @@ pub mod logging;
 pub(crate) mod zip;
 pub mod extract_tar_gz;
 pub mod run_minecraft_vanilla_server;
+pub mod mc_disconnect;

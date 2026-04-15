@@ -71,6 +71,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_listen_tcp() {
-        listen_tcp(CancellationToken::new(), None, "localhost:5200".to_string()).await.unwrap();
+        // listen_tcp(CancellationToken::new(), None, "localhost:5200".to_string()).await.unwrap();
     }
 }

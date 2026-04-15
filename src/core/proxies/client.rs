@@ -4,7 +4,6 @@ use crate::core::p2p::session::Session;
 use crate::dht::lookup_iroh_mapping;
 use crate::dumbpipe::connect_tcp;
 use crate::util::minecraft_listener::MinecraftListener;
-use crate::util::parse_server::parse_server;
 use crate::util::proxy_traffic::proxy_traffic;
 use anyhow::Context;
 use cancellable::cancellable;

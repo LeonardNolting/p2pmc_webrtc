@@ -19,11 +19,12 @@ use tokio::{
     select,
     time::timeout,
 };
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, info_span, Instrument};
 use webrtc::util::Conn;
 use crate::dht::lookup_iroh_mapping;
-use crate::util::parse_server::parse_server;
+use crate::util::parse_server::parse_handshake;
 
 const ALPN: &[u8] = b"DUMBPIPEV0";
 const HANDSHAKE: [u8; 5] = *b"hello";
@@ -172,9 +173,20 @@ pub async fn connect_tcp(
     ) -> anyhow::Result<()> {
         let (mut tcp_stream, tcp_addr) = next.std_context("error accepting tcp connection")?;
 
-        let server = parse_server(&mut tcp_stream)
+        /*let server = parse_server(&mut tcp_stream)
             .await
-            .context("Failed to parse Minecraft server")?;
+            .context("Failed to parse Minecraft server")?;*/
+        let handshake_info = match parse_handshake(&mut tcp_stream).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("error parsing handshake: {e}");
+                // Can't send Login Disconnect here — we don't even know if this is
+                // a Login connection or a Status ping.  Bare close is correct.
+                let _ = tcp_stream.shutdown().await;
+                return Ok(());
+            }
+        };
+        let server = format!("{}.jude.gg", handshake_info.server_id);
 
         let (tcp_recv, tcp_send) = tcp_stream.into_split();
         tracing::info!("got tcp connection from {}", tcp_addr);

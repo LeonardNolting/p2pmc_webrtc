@@ -26,7 +26,8 @@ use {
     tokio::net::{UnixListener, UnixStream},
 };
 use crate::dht::{lookup_iroh_mapping, publish_iroh_mapping};
-use crate::util::parse_server::parse_server;
+use crate::util::parse_server::{parse_handshake};
+use crate::util::mc_disconnect::{send_login_disconnect};
 
 pub use std::net::SocketAddrV4;
 
@@ -204,44 +205,124 @@ pub async fn p2p_client(
         handshake: bool,
         alpn: &[u8],
     ) -> Result<()> {
-        let (mut tcp_stream, tcp_addr) = next.std_context("error accepting tcp connection")?;
+        let (mut tcp_stream, tcp_addr) = match next {
+            Ok(v) => v,
+            Err(e) => return Err(e.into()),
+        };
 
-        let server = parse_server(&mut tcp_stream).await.expect("error parsing server");
-        let server = format!("{server}.jude.gg");
-
-        let (tcp_recv, tcp_send) = tcp_stream.into_split();
         tracing::info!("got tcp connection from {}", tcp_addr);
 
-        let ticket = lookup_iroh_mapping(pkarr_client, server)
-            .await
-            .expect("Failed to lookup ticket")
-            .expect("Ticket is not published");
-        let ticket = EndpointTicket::from_str(&ticket).std_context("invalid ticket")?;
-        let addr = ticket.endpoint_addr().to_owned();
+        // ---- parse handshake ----
+        // We now get both the server ID *and* the protocol version (needed to send
+        // correctly-encoded Login Disconnect packets).
+        let handshake_info = match parse_handshake(&mut tcp_stream).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("error parsing handshake: {e}");
+                // Can't send Login Disconnect here — we don't even know if this is
+                // a Login connection or a Status ping.  Bare close is correct.
+                let _ = tcp_stream.shutdown().await;
+                return Ok(());
+            }
+        };
 
-        let remote_endpoint_id = addr.id;
-        let connection = endpoint
-            .connect(addr, alpn)
-            .await
-            .std_context(format!("error connecting to {remote_endpoint_id}"))?;
-        let (mut endpoint_send, endpoint_recv) = connection
-            .open_bi()
-            .await
-            .std_context(format!("error opening bidi stream to {remote_endpoint_id}"))?;
-        // send the handshake unless we are using a custom alpn
-        // when using a custom alpn, everything is up to the user
-        if handshake {
-            // the connecting side must write first. we don't know if there will be something
-            // on stdin, so just write a handshake.
-            endpoint_send
-                .write_all(&HANDSHAKE)
-                .await
-                .anyerr()?;
-        }
-        forward_bidi(tcp_recv, tcp_send, endpoint_recv, endpoint_send).await?;
-        Ok::<_, AnyError>(())
+        // Helper: send a Login Disconnect then return Ok(()).
+        // Only meaningful when next_state == 2 (Login); for Status pings (1) we
+        // just close — the client is doing a server list refresh, not joining.
+        macro_rules! disconnect {
+        ($msg:expr) => {{
+            if handshake_info.next_state == 2 {
+                let _ = send_login_disconnect(
+                    &mut tcp_stream,
+                    $msg,
+                    handshake_info.protocol_version,
+                )
+                .await;
+            } else {
+                let _ = tcp_stream.shutdown().await;
+            }
+            return Ok(());
+        }};
     }
 
+        let server = format!("{}.jude.gg", handshake_info.server_id);
+
+        // ---- lookup ticket ----
+        let ticket = match lookup_iroh_mapping(pkarr_client, server.clone()).await {
+            Ok(Some(ticket)) => ticket,
+            Ok(None) => {
+                tracing::warn!("ticket not found for {server}");
+                disconnect!(&format!(
+                "Server '{}' not found. Check the address and try again.",
+                handshake_info.server_id
+            ));
+            }
+            Err(e) => {
+                tracing::error!("ticket lookup failed for {server}: {e}");
+                // This is an internal error on our side, not a user mistake.
+                disconnect!("Proxy error: failed to look up server. Please try again later.");
+            }
+        };
+
+        // ---- parse ticket ----
+        let ticket = match EndpointTicket::from_str(&ticket) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("invalid ticket for {server}: {e}");
+                disconnect!(&format!(
+                "Server '{}' has an invalid configuration. Contact the server owner.",
+                handshake_info.server_id
+            ));
+            }
+        };
+
+        let addr = ticket.endpoint_addr().to_owned();
+        let remote_endpoint_id = addr.id;
+
+        // ---- connect ----
+        let connection = match endpoint.connect(addr, alpn).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("connect failed to {remote_endpoint_id}: {e}");
+                disconnect!(&format!(
+                "Could not reach server '{}'. It may be offline.",
+                handshake_info.server_id
+            ));
+            }
+        };
+
+        // ---- open bidi stream ----
+        let (mut endpoint_send, endpoint_recv) = match connection.open_bi().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("open_bi failed to {remote_endpoint_id}: {e}");
+                disconnect!(&format!(
+                "Connected to '{}' but could not open a stream. Try again.",
+                handshake_info.server_id
+            ));
+            }
+        };
+
+        // ---- handshake ----
+        if handshake {
+            if let Err(e) = endpoint_send.write_all(&HANDSHAKE).await {
+                tracing::warn!("iroh handshake failed: {e}");
+                disconnect!("Proxy handshake failed. Please try again.");
+            }
+        }
+
+        // ---- only split once everything is ready ----
+        let (tcp_recv, tcp_send) = tcp_stream.into_split();
+
+        // ---- forwarding ----
+        if let Err(e) = forward_bidi(tcp_recv, tcp_send, endpoint_recv, endpoint_send).await {
+            tracing::warn!("forwarding failed: {e}");
+            // Stream halves drop here; connection closes naturally.
+            return Ok(());
+        }
+
+        Ok(())
+    }
     // 2. Hand ownership of the infinite loop over to Tokio.
     tokio::spawn(async move {
         loop {
