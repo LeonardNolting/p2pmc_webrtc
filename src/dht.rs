@@ -49,7 +49,7 @@ pub async fn publish_iroh_mapping(
         .publish(&signed_packet, None)
         .await
         .map_err(|e| e.to_string())?;
-    info!("Successfully published ticket for '{}', public key: {}", name, keypair.public_key());
+    info!("Successfully published ticket for '{}', public key: {}, value: {}", name, keypair.public_key(), ticket.as_str());
 
     // 3. Spawn the background republishing loop
     tokio::spawn(async move {
