@@ -65,14 +65,21 @@ const NBT_TEXT_COMPONENT_MIN_PROTOCOL: i32 = 765;
 // 1.20.3+:     Named Binary Tag (NBT), specifically a TAG_Compound containing
 //              a TAG_String named "text".
 //
-// NBT wire format for TAG_Compound { "text": "<msg>" }:
-//   0x0A                       — TAG_Compound type
-//   0x00 0x00                  — name length = 0 (root compound has empty name in network NBT)
-//   0x08                       — TAG_String type (for the "text" entry)
-//   0x00 0x04                  — name length = 4
+// Network NBT wire format for a text component { "text": "<msg>" }:
+//
+// Minecraft's network NBT (used in packets since 1.20.3) omits the leading
+// type byte and root compound name that appear in file/disk NBT.  The payload
+// starts directly with the first entry inside the compound:
+//
+//   0x08                       — TAG_String type  (first entry in the compound)
+//   0x00 0x04                  — name length = 4  (big-endian u16)
 //   0x74 0x65 0x78 0x74        — "text"
-//   hi lo + bytes              — value: big-endian u16 length + UTF-8
+//   hi lo                      — value length (big-endian u16)
+//   <bytes>                    — UTF-8 value
 //   0x00                       — TAG_End (closes the compound)
+//
+// Do NOT prepend 0x0A (TAG_Compound) or a root name — that is disk NBT format
+// and will cause the client to misparse the packet.
 // -----------------------------------------------------------------------------
 
 fn encode_text_component_nbt(text: &str) -> Vec<u8> {
@@ -83,9 +90,7 @@ fn encode_text_component_nbt(text: &str) -> Vec<u8> {
     let key_len = key.len() as u16;
 
     let mut buf = Vec::new();
-    // Root TAG_Compound with empty name
-    buf.push(0x0A); // TAG_Compound
-    buf.extend_from_slice(&0u16.to_be_bytes()); // root name length = 0
+    // No leading TAG_Compound type byte or root name — network NBT only.
 
     // TAG_String entry: "text" -> message
     buf.push(0x08); // TAG_String
@@ -94,7 +99,7 @@ fn encode_text_component_nbt(text: &str) -> Vec<u8> {
     buf.extend_from_slice(&text_len.to_be_bytes());
     buf.extend_from_slice(text_bytes);
 
-    // TAG_End
+    // TAG_End (closes the implicit root compound)
     buf.push(0x00);
     buf
 }
