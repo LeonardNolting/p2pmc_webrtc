@@ -90,7 +90,7 @@ pub async fn lookup_iroh_mapping(
         for record in packet.resource_records("_iroh") {
             if let RData::TXT(txt) = &record.rdata {
                 if let Ok(ticket) = String::try_from(txt.clone()) {
-                    info!("Retrieved ticket for {}: {}", name, ticket);
+                    info!("Retrieved ticket for {} (public key: {}): {}", name, public_key.to_string(), ticket);
                     return Ok(Some(ticket));
                 }
             }
@@ -101,5 +101,8 @@ pub async fn lookup_iroh_mapping(
 }
 
 pub fn create_pkarr_client() -> Result<Client, String> {
-    Client::builder().build().map_err(|e| e.to_string())
+    Client::builder()
+        .minimum_ttl(1)
+        .maximum_ttl(24 * 60 * 60)
+        .build().map_err(|e| e.to_string())
 }
