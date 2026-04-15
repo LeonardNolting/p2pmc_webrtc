@@ -167,8 +167,12 @@ async fn forward_bidi(
     Ok(())
 }
 
-/// Listen on a tcp port and forward incoming connections to an endpoint.
-pub async fn p2p_client(pkarr_client: Client, addr: String, ipv4_addr: Option<SocketAddrV4>) -> Result<()> {
+pub async fn p2p_client(
+    pkarr_client: Client,
+    addr: String,
+    ipv4_addr: Option<SocketAddrV4>,
+    cancel_token: CancellationToken, // 1. Inject the token from Flutter
+) -> Result<()> {
     let pkarr_client = Arc::new(pkarr_client);
 
     let addrs = addr
@@ -181,7 +185,7 @@ pub async fn p2p_client(pkarr_client: Client, addr: String, ipv4_addr: Option<So
     tracing::info!("tcp listening on {:?}", addrs);
 
     // Wait for our own endpoint to be ready before trying to connect.
-    if (timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
+    if (tokio::time::timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
         eprintln!("Warning: Failed to connect to the home relay");
     }
 
@@ -192,6 +196,7 @@ pub async fn p2p_client(pkarr_client: Client, addr: String, ipv4_addr: Option<So
             return Ok(());
         }
     };
+
     async fn handle_tcp_accept(
         pkarr_client: Arc<Client>,
         next: io::Result<(tokio::net::TcpStream, SocketAddr)>,
@@ -202,6 +207,7 @@ pub async fn p2p_client(pkarr_client: Client, addr: String, ipv4_addr: Option<So
         let (mut tcp_stream, tcp_addr) = next.std_context("error accepting tcp connection")?;
 
         let server = parse_server(&mut tcp_stream).await.expect("error parsing server");
+        let server = format!("{server}.jude.gg");
 
         let (tcp_recv, tcp_send) = tcp_stream.into_split();
         tracing::info!("got tcp connection from {}", tcp_addr);
@@ -235,41 +241,55 @@ pub async fn p2p_client(pkarr_client: Client, addr: String, ipv4_addr: Option<So
         forward_bidi(tcp_recv, tcp_send, endpoint_recv, endpoint_send).await?;
         Ok::<_, AnyError>(())
     }
-    loop {
-        // also wait for ctrl-c here so we can use it before accepting a connection
-        let next = tokio::select! {
-            stream = tcp_listener.accept() => stream,
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("got ctrl-c, exiting");
-                break;
-            }
-        };
-        let endpoint = endpoint.clone();
-        let handshake = !false;
-        let alpn = ALPN.to_vec();
-        let pkarr_client = pkarr_client.clone();
-        tokio::spawn(async move {
-            if let Err(cause) = handle_tcp_accept(pkarr_client, next, endpoint, handshake, &alpn).await {
-                // log error at warn level
-                //
-                // we should know about it, but it's not fatal
-                tracing::warn!("error handling connection: {}", cause);
-            }
-        });
-    }
+
+    // 2. Hand ownership of the infinite loop over to Tokio.
+    tokio::spawn(async move {
+        loop {
+            let alpn = ALPN.to_vec();
+            let handshake = !false;
+
+            let endpoint = endpoint.clone();
+            let pkarr_client = pkarr_client.clone();
+
+            // 3. tokio::select! listens for either a new TCP connection or the cancel signal
+            let next = tokio::select! {
+                stream = tcp_listener.accept() => stream,
+                _ = cancel_token.cancelled() => {
+                    tracing::info!("Cancellation requested via token. Shutting down P2P client loop.");
+                    let _ = &endpoint.close().await;
+                    break;
+                }
+            };
+
+            // Spawn the connection handler so the main loop isn't blocked
+            tokio::spawn(async move {
+                if let Err(cause) = handle_tcp_accept(pkarr_client, next, endpoint, handshake, &alpn).await {
+                    tracing::warn!("error handling connection: {}", cause);
+                }
+            });
+        }
+    });
+
+    // 4. Return successfully to Flutter right after the task is spawned.
     Ok(())
 }
 
 /// Listen on an endpoint and forward incoming connections to a tcp socket.
-pub async fn p2p_server(host: String, ipv4_addr: Option<SocketAddrV4>) -> Result<()> {
+pub async fn p2p_server(
+    host: String,
+    url_name: String,
+    ipv4_addr: Option<SocketAddrV4>,
+    cancel_token: CancellationToken, // Inject the token from Flutter here
+) -> Result<()> {
     let addrs = match host.to_socket_addrs() {
         Ok(addrs) => addrs.collect::<Vec<_>>(),
         Err(e) => bail_any!("invalid host string {}: {}", host, e),
     };
     let secret_key = get_or_create_secret()?;
+    // let secret_key = SecretKey::from_str("7e7401dc4939595037d7cd24e24b827b5f6794aa6910b9eb9280425416e1eec8").std_context("invalid secret")?;
     let endpoint = create_endpoint(secret_key, ipv4_addr, vec![ALPN.into()]).await?;
     // wait for the endpoint to figure out its address before making a ticket
-    if (timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
+    if (tokio::time::timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
         eprintln!("Warning: Failed to connect to the home relay");
     }
     let addr = endpoint.addr();
@@ -294,9 +314,17 @@ pub async fn p2p_server(host: String, ipv4_addr: Option<SocketAddrV4>) -> Result
             .map_or("None".to_string(), |url| url.to_string())
     );
 
-    publish_iroh_mapping(Arc::new(Client::builder().build().unwrap()), "server-be6r".to_string(), ticket.to_string(), CancellationToken::new(), Some(60*60), Some(30*60)).await?;
+    publish_iroh_mapping(
+        Arc::new(Client::builder().build().unwrap()), // TODO use client with min/max ttl?
+        url_name,
+        ticket.to_string(),
+        CancellationToken::new(),
+        None,
+        None,
+    ).await?;
 
-    // handle a new incoming connection on the endpoint
+    // We move handle_endpoint_accept inside so it can be easily
+    // captured or used by the spawned task without lifetime issues.
     async fn handle_endpoint_accept(
         accepting: Accepting,
         addrs: Vec<std::net::SocketAddr>,
@@ -324,30 +352,38 @@ pub async fn p2p_server(host: String, ipv4_addr: Option<SocketAddrV4>) -> Result
         Ok(())
     }
 
-    loop {
-        let incoming = select! {
-            incoming = endpoint.accept() => incoming,
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("got ctrl-c, exiting");
+    // Hand ownership of the infinite loop over to Tokio.
+    // The FFI future will resolve successfully right after this block.
+    tokio::spawn(async move {
+        loop {
+            let incoming = select! {
+                incoming = endpoint.accept() => incoming,
+                _ = cancel_token.cancelled() => {
+                    // Replaces the ctrl_c system signal with our application-level signal
+                    tracing::info!("Cancellation requested via token. Shutting down P2P server loop.");
+                    let _ = &endpoint.close().await;
+                    break;
+                }
+            };
+
+            let Some(incoming) = incoming else {
                 break;
-            }
-        };
-        let Some(incoming) = incoming else {
-            break;
-        };
-        let Ok(connecting) = incoming.accept() else {
-            break;
-        };
-        let addrs = addrs.clone();
-        let handshake = !false;
-        tokio::spawn(async move {
-            if let Err(cause) = handle_endpoint_accept(connecting, addrs, handshake).await {
-                // log error at warn level
-                //
-                // we should know about it, but it's not fatal
-                tracing::warn!("error handling connection: {}", cause);
-            }
-        });
-    }
+            };
+            let Ok(connecting) = incoming.accept() else {
+                break;
+            };
+
+            let addrs = addrs.clone();
+            let handshake = !false;
+
+            tokio::spawn(async move {
+                if let Err(cause) = handle_endpoint_accept(connecting, addrs, handshake).await {
+                    tracing::warn!("error handling connection: {}", cause);
+                }
+            });
+        }
+    });
+
+    // Return successfully to Flutter. The server is now running autonomously.
     Ok(())
 }
