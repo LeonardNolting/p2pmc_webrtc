@@ -236,6 +236,7 @@ pub async fn p2p_client(
                     &mut tcp_stream,
                     $msg,
                     handshake_info.protocol_version,
+                    handshake_info.packet_len,
                 )
                 .await;
             } else {

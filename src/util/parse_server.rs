@@ -18,6 +18,8 @@ pub struct HandshakeInfo {
     /// next_state field from the Handshake: 1 = Status, 2 = Login.
     /// We should only send Login Disconnect when this is 2.
     pub next_state: i32,
+    /// Total length of the handshake packet (including the VarInt length prefix).
+    pub packet_len: usize,
 }
 
 // -----------------------------------------------------------------------------
@@ -56,9 +58,10 @@ async fn read_handshake(stream: &mut TcpStream) -> anyhow::Result<HandshakeInfo>
 fn parse_handshake_buf(buf: &[u8]) -> anyhow::Result<HandshakeInfo> {
     let mut pos = 0;
 
-    // ---- packet length (VarInt, skip) ----
-    let (_, n) = decode_varint(&buf[pos..])
+    // ---- packet length (VarInt) ----
+    let (packet_body_len, n) = decode_varint(&buf[pos..])
         .ok_or_else(|| anyhow::anyhow!("Failed to read packet length"))?;
+    let packet_len = (packet_body_len as usize) + n;
     pos += n;
 
     // ---- packet ID (VarInt, must be 0x00 for Handshake) ----
@@ -130,5 +133,6 @@ fn parse_handshake_buf(buf: &[u8]) -> anyhow::Result<HandshakeInfo> {
         server_id,
         protocol_version,
         next_state,
+        packet_len,
     })
-}
+    }

@@ -1,5 +1,5 @@
 use std::io::Result;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
@@ -78,28 +78,20 @@ const NBT_TEXT_COMPONENT_MIN_PROTOCOL: i32 = 765;
 // -----------------------------------------------------------------------------
 
 fn encode_text_component_nbt(text: &str) -> Vec<u8> {
-    let text_bytes = text.as_bytes();
-    let text_len = text_bytes.len() as u16;
+    let mut map = std::collections::HashMap::new();
+    map.insert("text".to_string(), fastnbt::Value::String(text.to_string()));
+    let val = fastnbt::Value::Compound(map);
+    let mut bytes = fastnbt::to_bytes(&val).unwrap();
 
-    let mut buf = Vec::new();
-    // Network NBT for a root tag: [Type ID] [Name Length = 0] [Payload]
-    // For 1.21, the reason must be an NBT Compound containing the "text" key.
-    buf.push(0x0A); // TAG_Compound
-    buf.push(0x00); // Root name length = 0 (big-endian u16)
-    buf.push(0x00);
-
-    // TAG_String entry for "text"
-    buf.push(0x08); // TAG_String
-    buf.push(0x00); // Key length = 4 ("text")
-    buf.push(0x04);
-    buf.extend_from_slice(b"text");
-    buf.extend_from_slice(&text_len.to_be_bytes());
-    buf.extend_from_slice(text_bytes);
-
-    // TAG_End (closes the compound)
-    buf.push(0x00);
-
-    buf
+    // fastnbt::to_bytes produces a named tag: [Type ID] [Name Len (2)] [Name] [Payload]
+    // For Value::Compound, it produces 0x0A 0x00 0x00 ...
+    // Minecraft network protocol since 1.20.2/1.20.5 often expects an UNNAMED tag.
+    // Unnamed TAG_Compound: 0x0A [Tags...] 0x00
+    if bytes.len() >= 3 && bytes[0] == 0x0A && bytes[1] == 0x00 && bytes[2] == 0x00 {
+        bytes.remove(1);
+        bytes.remove(1);
+    }
+    bytes
 }
 
 fn encode_text_component_json(text: &str) -> Vec<u8> {
@@ -177,17 +169,23 @@ pub fn parse_protocol_version(buf: &[u8]) -> Option<i32> {
 
 /// Send a Login Disconnect packet to the client with a human-readable message,
 /// then shut down the write half.  `protocol_version` should come from
-/// `parse_protocol_version`; if unknown, pass 0 to use the legacy JSON format
-/// (safe for very old clients; modern ones tolerate a graceful close anyway).
+/// `HandshakeInfo`; `consume_len` is the number of bytes to discard from the
+/// stream (e.g. the peeked Handshake) before writing.
 pub async fn send_login_disconnect(
     stream: &mut TcpStream,
     message: &str,
     protocol_version: i32,
+    consume_len: usize,
 ) -> std::io::Result<()> {
+    if consume_len > 0 {
+        let mut discard = vec![0u8; consume_len];
+        let _ = stream.read_exact(&mut discard).await;
+    }
+
     let packet = build_login_disconnect(message, protocol_version);
     // Best-effort: ignore write errors — the important thing is we tried.
     let write_timeout = Duration::from_millis(500);
     let _ = timeout(write_timeout, stream.write_all(&packet)).await;
     let _ = stream.shutdown().await;
     Ok(())
-    }
+}
