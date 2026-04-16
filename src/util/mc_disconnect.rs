@@ -83,12 +83,21 @@ fn encode_text_component_nbt(text: &str) -> Vec<u8> {
 
     let mut buf = Vec::new();
     // Network NBT for a root tag: [Type ID] [Name Length = 0] [Payload]
-    // For a simple text component, we use TAG_String (0x08).
-    buf.push(0x08); // TAG_String
+    // For 1.21, the reason must be an NBT Compound containing the "text" key.
+    buf.push(0x0A); // TAG_Compound
     buf.push(0x00); // Root name length = 0 (big-endian u16)
     buf.push(0x00);
+
+    // TAG_String entry for "text"
+    buf.push(0x08); // TAG_String
+    buf.push(0x00); // Key length = 4 ("text")
+    buf.push(0x04);
+    buf.extend_from_slice(b"text");
     buf.extend_from_slice(&text_len.to_be_bytes());
     buf.extend_from_slice(text_bytes);
+
+    // TAG_End (closes the compound)
+    buf.push(0x00);
 
     buf
 }
