@@ -119,11 +119,11 @@ fn encode_text_component_json(text: &str) -> Vec<u8> {
 pub fn build_login_disconnect(message: &str, protocol_version: i32) -> Vec<u8> {
     tracing::info!("Building Login Disconnect for protocol version {}: {}", protocol_version, message);
     let packet_id = encode_varint(0x00);
-    let reason = if protocol_version >= NBT_TEXT_COMPONENT_MIN_PROTOCOL {
-        encode_text_component_nbt(message)
-    } else {
-        encode_text_component_json(message)
-    };
+    
+    // Even in newer versions, sending a JSON string is the most compatible way 
+    // to ensure the client receives a correctly length-prefixed 'Reason' field.
+    // The "65 bytes extra" error confirms the client expects a length prefix.
+    let reason = encode_text_component_json(message);
 
     let mut payload = packet_id;
     payload.extend_from_slice(&reason);
