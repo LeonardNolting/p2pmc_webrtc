@@ -62,45 +62,34 @@ const NBT_TEXT_COMPONENT_MIN_PROTOCOL: i32 = 765;
 // Pre-1.20.3:  JSON string, encoded as a Minecraft String (varint length + UTF-8)
 //              e.g. {"text":"Server not found"}
 //
-// 1.20.3+:     Named Binary Tag (NBT), specifically a TAG_Compound containing
-//              a TAG_String named "text".
+// 1.20.3+:     Named Binary Tag (NBT). Plain-text components use TAG_String.
+//              More complex components use TAG_Compound.
 //
-// Network NBT wire format for a text component { "text": "<msg>" }:
+// Network NBT wire format for a plain-text component:
 //
-// Minecraft's network NBT (used in packets since 1.20.3) omits the leading
-// type byte and root compound name that appear in file/disk NBT.  The payload
-// starts directly with the first entry inside the compound:
-//
-//   0x08                       — TAG_String type  (first entry in the compound)
-//   0x00 0x04                  — name length = 4  (big-endian u16)
-//   0x74 0x65 0x78 0x74        — "text"
+//   0x08                       — TAG_String type
+//   0x00 0x00                  — root name length = 0 (unnamed root tag)
 //   hi lo                      — value length (big-endian u16)
 //   <bytes>                    — UTF-8 value
-//   0x00                       — TAG_End (closes the compound)
 //
-// Do NOT prepend 0x0A (TAG_Compound) or a root name — that is disk NBT format
-// and will cause the client to misparse the packet.
+// Note: Some NBT in Minecraft protocol omits the leading TAG ID and name,
+// but for Text Components in many packets (including Login Disconnect),
+// the full unnamed tag is expected.
 // -----------------------------------------------------------------------------
 
 fn encode_text_component_nbt(text: &str) -> Vec<u8> {
     let text_bytes = text.as_bytes();
     let text_len = text_bytes.len() as u16;
 
-    let key = b"text";
-    let key_len = key.len() as u16;
-
     let mut buf = Vec::new();
-    // No leading TAG_Compound type byte or root name — network NBT only.
-
-    // TAG_String entry: "text" -> message
+    // Network NBT for a root tag: [Type ID] [Name Length = 0] [Payload]
+    // For a simple text component, we use TAG_String (0x08).
     buf.push(0x08); // TAG_String
-    buf.extend_from_slice(&key_len.to_be_bytes());
-    buf.extend_from_slice(key);
+    buf.push(0x00); // Root name length = 0 (big-endian u16)
+    buf.push(0x00);
     buf.extend_from_slice(&text_len.to_be_bytes());
     buf.extend_from_slice(text_bytes);
 
-    // TAG_End (closes the implicit root compound)
-    buf.push(0x00);
     buf
 }
 
@@ -192,4 +181,4 @@ pub async fn send_login_disconnect(
     let _ = timeout(write_timeout, stream.write_all(&packet)).await;
     let _ = stream.shutdown().await;
     Ok(())
-}
+    }
