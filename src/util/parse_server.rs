@@ -51,6 +51,7 @@ async fn read_handshake(stream: &mut TcpStream) -> anyhow::Result<HandshakeInfo>
     }
 
     let buf = &peek_buf[..bytes_read];
+    tracing::debug!("Peeked handshake buffer ({} bytes): {:02x?}", bytes_read, buf);
     parse_handshake_buf(buf)
 }
 
@@ -62,6 +63,7 @@ fn parse_handshake_buf(buf: &[u8]) -> anyhow::Result<HandshakeInfo> {
     let (packet_body_len, n) = decode_varint(&buf[pos..])
         .ok_or_else(|| anyhow::anyhow!("Failed to read packet length"))?;
     let packet_len = (packet_body_len as usize) + n;
+    tracing::debug!("Packet body length: {}, VarInt length: {}", packet_body_len, n);
     pos += n;
 
     // ---- packet ID (VarInt, must be 0x00 for Handshake) ----
@@ -74,6 +76,7 @@ fn parse_handshake_buf(buf: &[u8]) -> anyhow::Result<HandshakeInfo> {
     let (protocol_version, n) = decode_varint(&buf[pos..])
         .ok_or_else(|| anyhow::anyhow!("Failed to read protocol version"))?;
     pos += n;
+    tracing::info!("Detected protocol version: {}", protocol_version);
 
     // ---- server address (VarInt length + UTF-8) ----
     let (addr_len, n) = decode_varint(&buf[pos..])

@@ -231,6 +231,7 @@ pub async fn p2p_client(
         // just close — the client is doing a server list refresh, not joining.
         macro_rules! disconnect {
         ($msg:expr) => {{
+            tracing::info!("Disconnecting client with message: {}", $msg);
             if handshake_info.next_state == 2 {
                 let _ = send_login_disconnect(
                     &mut tcp_stream,
@@ -240,6 +241,7 @@ pub async fn p2p_client(
                 )
                 .await;
             } else {
+                tracing::info!("Next state is {}, not Login (2), just shutting down.", handshake_info.next_state);
                 let _ = tcp_stream.shutdown().await;
             }
             return Ok(());

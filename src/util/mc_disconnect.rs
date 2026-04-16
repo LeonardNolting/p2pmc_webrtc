@@ -83,6 +83,8 @@ fn encode_text_component_nbt(text: &str) -> Vec<u8> {
     let val = fastnbt::Value::Compound(map);
     let mut bytes = fastnbt::to_bytes(&val).unwrap();
 
+    tracing::debug!("NBT before stripping name: {:02x?}", bytes);
+
     // fastnbt::to_bytes produces a named tag: [Type ID] [Name Len (2)] [Name] [Payload]
     // For Value::Compound, it produces 0x0A 0x00 0x00 ...
     // Minecraft network protocol since 1.20.2/1.20.5 often expects an UNNAMED tag.
@@ -91,6 +93,7 @@ fn encode_text_component_nbt(text: &str) -> Vec<u8> {
         bytes.remove(1);
         bytes.remove(1);
     }
+    tracing::debug!("NBT after stripping name: {:02x?}", bytes);
     bytes
 }
 
@@ -98,6 +101,7 @@ fn encode_text_component_json(text: &str) -> Vec<u8> {
     // Escape quotes in the text for JSON safety
     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     let json = format!(r#"{{"text":"{}"}}"#, escaped);
+    tracing::debug!("Encoded JSON: {}", json);
     encode_mc_string(&json)
 }
 
@@ -113,6 +117,7 @@ fn encode_text_component_json(text: &str) -> Vec<u8> {
 // -----------------------------------------------------------------------------
 
 pub fn build_login_disconnect(message: &str, protocol_version: i32) -> Vec<u8> {
+    tracing::info!("Building Login Disconnect for protocol version {}: {}", protocol_version, message);
     let packet_id = encode_varint(0x00);
     let reason = if protocol_version >= NBT_TEXT_COMPONENT_MIN_PROTOCOL {
         encode_text_component_nbt(message)
@@ -125,6 +130,7 @@ pub fn build_login_disconnect(message: &str, protocol_version: i32) -> Vec<u8> {
 
     let mut packet = encode_varint(payload.len() as i32);
     packet.extend_from_slice(&payload);
+    tracing::debug!("Full packet bytes: {:02x?}", packet);
     packet
 }
 
