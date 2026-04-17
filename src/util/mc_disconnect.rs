@@ -8,7 +8,7 @@ use tokio::time::{timeout, Duration};
 // -----------------------------------------------------------------------------
 
 /// Encodes a VarInt into a Vec<u8>.
-pub fn encode_varint(mut value: i32) -> Vec<u8> {
+pub(crate) fn encode_varint(mut value: i32) -> Vec<u8> {
     let mut buf = Vec::with_capacity(5);
     loop {
         let mut byte = (value & 0x7F) as u8;
@@ -25,7 +25,7 @@ pub fn encode_varint(mut value: i32) -> Vec<u8> {
 }
 
 /// Decodes a VarInt from a byte slice, returning (value, bytes_consumed).
-pub fn decode_varint(buf: &[u8]) -> Option<(i32, usize)> {
+pub(crate) fn decode_varint(buf: &[u8]) -> Option<(i32, usize)> {
     let mut result = 0i32;
     let mut shift = 0;
     for (i, &byte) in buf.iter().enumerate() {
@@ -42,7 +42,7 @@ pub fn decode_varint(buf: &[u8]) -> Option<(i32, usize)> {
 }
 
 /// Encodes a UTF-8 string as a Minecraft protocol String (VarInt length + UTF-8 bytes).
-pub fn encode_mc_string(s: &str) -> Vec<u8> {
+pub(crate) fn encode_mc_string(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut buf = encode_varint(bytes.len() as i32);
     buf.extend_from_slice(bytes);
@@ -116,7 +116,7 @@ fn encode_text_component_json(text: &str) -> Vec<u8> {
 //   ≥ 1.20.3  → NBT compound
 // -----------------------------------------------------------------------------
 
-pub fn build_login_disconnect(message: &str, protocol_version: i32) -> Vec<u8> {
+pub(crate) fn build_login_disconnect(message: &str, protocol_version: i32) -> Vec<u8> {
     tracing::info!("Building Login Disconnect for protocol version {}: {}", protocol_version, message);
     let packet_id = encode_varint(0x00);
     
@@ -147,7 +147,7 @@ pub fn build_login_disconnect(message: &str, protocol_version: i32) -> Vec<u8> {
 
 /// Extract the protocol version from the raw peeked bytes of a Handshake packet.
 /// Returns None if the buffer is too short or malformed.
-pub fn parse_protocol_version(buf: &[u8]) -> Option<i32> {
+pub(crate) fn parse_protocol_version(buf: &[u8]) -> Option<i32> {
     let mut pos = 0;
 
     // Skip packet length
@@ -177,7 +177,7 @@ pub fn parse_protocol_version(buf: &[u8]) -> Option<i32> {
 /// then shut down the write half.  `protocol_version` should come from
 /// `HandshakeInfo`; `consume_len` is the number of bytes to discard from the
 /// stream (e.g. the peeked Handshake) before writing.
-pub async fn send_login_disconnect(
+pub(crate) async fn send_login_disconnect(
     stream: &mut TcpStream,
     message: &str,
     protocol_version: i32,
