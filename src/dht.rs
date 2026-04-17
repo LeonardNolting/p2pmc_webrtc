@@ -19,7 +19,7 @@ fn derive_keypair_from_name(name: &str) -> Keypair {
 ///
 /// Returns `Ok(())` immediately after the *first* successful publish.
 pub async fn publish_iroh_mapping(
-    client: Arc<Client>, // TODO later: pass by value (it clones cheaply via internal Arc) for the background task
+    client: Client, // TODO later: pass by value (it clones cheaply via internal Arc) for the background task
     name: String,
     ticket: String,
     cancel_token: CancellationToken,
@@ -80,7 +80,7 @@ pub async fn publish_iroh_mapping(
 
 /// Looks up an Iroh ticket in the DHT associated with a human-readable name.
 pub async fn lookup_iroh_mapping(
-    client: Arc<Client>,
+    client: Client,
     name: String,
 ) -> Result<Option<String>, String> {
     let public_key = derive_keypair_from_name(&name).public_key();

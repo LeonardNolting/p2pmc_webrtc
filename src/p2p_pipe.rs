@@ -25,7 +25,7 @@ use {
     std::path::PathBuf,
     tokio::net::{UnixListener, UnixStream},
 };
-use crate::dht::{lookup_iroh_mapping, publish_iroh_mapping};
+use crate::dht::{create_pkarr_client, lookup_iroh_mapping, publish_iroh_mapping};
 use crate::util::parse_server::{parse_handshake};
 use crate::util::mc_disconnect::{send_login_disconnect};
 
@@ -174,8 +174,6 @@ pub async fn p2p_client(
     ipv4_addr: Option<SocketAddrV4>,
     cancel_token: CancellationToken, // 1. Inject the token from Flutter
 ) -> Result<()> {
-    let pkarr_client = Arc::new(pkarr_client);
-
     let addrs = addr
         .to_socket_addrs()
         .std_context(format!("invalid host string {}", addr))?;
@@ -199,7 +197,7 @@ pub async fn p2p_client(
     };
 
     async fn handle_tcp_accept(
-        pkarr_client: Arc<Client>,
+        pkarr_client: Client,
         next: io::Result<(tokio::net::TcpStream, SocketAddr)>,
         endpoint: Endpoint,
         handshake: bool,
@@ -399,7 +397,7 @@ pub async fn p2p_server(
     );
 
     publish_iroh_mapping(
-        Arc::new(Client::builder().build().unwrap()), // TODO use client with min/max ttl?
+        create_pkarr_client().unwrap(),
         url_name,
         ticket.to_string(),
         CancellationToken::new(),
