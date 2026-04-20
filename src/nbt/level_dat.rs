@@ -22,7 +22,7 @@ pub struct LevelDat {
 #[serde(rename_all = "PascalCase")]
 #[frb(dart_metadata=("freezed"))]
 pub struct Data {
-    pub version: Version,
+    pub version: Option<Version>,
     // pub spawn_x: Option<i32>,
     // pub spawn_y: Option<i32>,
     // pub spawn_z: Option<i32>,
