@@ -1,11 +1,19 @@
 use std::sync::Arc;
 use pkarr::dns::rdata::{RData, TXT};
 use pkarr::dns::Name;
-use pkarr::{Client, Keypair, SignedPacket};
+use pkarr::{Keypair, SignedPacket};
+pub use pkarr::Client;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+use flutter_rust_bridge::frb;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+#[frb(external)]
+impl Client {
+    #[frb(sync)]
+    pub fn clone(&self) -> Self {}
+}
 
 /// Deterministically derives an Ed25519 Keypair from an arbitrary string.
 fn derive_keypair_from_name(name: &str) -> Keypair {
@@ -86,7 +94,7 @@ pub async fn lookup_iroh_mapping(
     let public_key = derive_keypair_from_name(&name).public_key();
 
     // Resolve returns None if no packet is found, which we safely pass up to Dart
-    if let Some(packet) = client.resolve(&public_key).await {
+    if let Some(packet) = client.resolve_most_recent(&public_key).await {
         for record in packet.resource_records("_iroh") {
             if let RData::TXT(txt) = &record.rdata {
                 if let Ok(ticket) = String::try_from(txt.clone()) {
@@ -102,7 +110,9 @@ pub async fn lookup_iroh_mapping(
 
 pub fn create_pkarr_client() -> Result<Client, String> {
     Client::builder()
-        .minimum_ttl(1)
-        .maximum_ttl(24 * 60 * 60)
+        // .no_relays()
+        .minimum_ttl(0)
+        .maximum_ttl(0)
+        .cache_size(0)
         .build().map_err(|e| e.to_string())
 }
