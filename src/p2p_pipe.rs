@@ -172,15 +172,18 @@ pub async fn p2p_client(
     pkarr_client: Client,
     addr: String,
     ipv4_addr: Option<SocketAddrV4>,
-    cancel_token: CancellationToken, // 1. Inject the token from Flutter
+    cancel_token: CancellationToken,
 ) -> Result<()> {
     let addrs = addr
         .to_socket_addrs()
-        .std_context(format!("invalid host string {}", addr))?;
+        .std_context(format!("invalid host string {}", addr))?
+        .collect::<Vec<_>>(); // Collect to avoid lifetime issues with slice
+
     let secret_key = get_or_create_secret()?;
     let endpoint = create_endpoint(secret_key, ipv4_addr, vec![])
         .await
         .std_context("unable to bind endpoint")?;
+
     tracing::info!("tcp listening on {:?}", addrs);
 
     // Wait for our own endpoint to be ready before trying to connect.
@@ -188,13 +191,9 @@ pub async fn p2p_client(
         eprintln!("Warning: Failed to connect to the home relay");
     }
 
-    let tcp_listener = match tokio::net::TcpListener::bind(addrs.as_slice()).await {
-        Ok(tcp_listener) => tcp_listener,
-        Err(cause) => {
-            tracing::error!("error binding tcp socket to {:?}: {}", addrs, cause);
-            return Ok(());
-        }
-    };
+    let tcp_listener = tokio::net::TcpListener::bind(addrs.as_slice())
+        .await
+        .std_context(format!("error binding tcp socket to {:?}", addrs))?;
 
     async fn handle_tcp_accept(
         pkarr_client: Client,
@@ -324,7 +323,9 @@ pub async fn p2p_client(
 
         Ok(())
     }
-    // 2. Hand ownership of the infinite loop over to Tokio.
+
+    let loop_cancel_token = cancel_token.clone();
+
     tokio::spawn(async move {
         loop {
             let alpn = ALPN.to_vec();
@@ -332,60 +333,87 @@ pub async fn p2p_client(
 
             let endpoint = endpoint.clone();
             let pkarr_client = pkarr_client.clone();
+            let conn_cancel_token = loop_cancel_token.clone();
 
-            // 3. tokio::select! listens for either a new TCP connection or the cancel signal
+            // 1. Select between an incoming connection and the cancellation signal
             let next = tokio::select! {
-                stream = tcp_listener.accept() => stream,
-                _ = cancel_token.cancelled() => {
-                    tracing::info!("Cancellation requested via token. Shutting down P2P client loop.");
-                    let _ = &endpoint.close().await;
+                biased; // Optimization: check cancellation first
+                _ = loop_cancel_token.cancelled() => {
+                    tracing::info!("Cancellation requested. Shutting down P2P server loop.");
                     break;
+                }
+                res = tcp_listener.accept() => res,
+            };
+
+            let (stream, tcp_addr) = match next {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("Accept error: {}", e);
+                    continue;
                 }
             };
 
-            // Spawn the connection handler so the main loop isn't blocked
+            // 2. Spawn the connection handler
             tokio::spawn(async move {
-                if let Err(cause) = handle_tcp_accept(pkarr_client, next, endpoint, handshake, &alpn).await {
-                    tracing::warn!("error handling connection: {}", cause);
+                // Wrap the handler so the specific connection also dies on cancellation
+                tokio::select! {
+                    _ = conn_cancel_token.cancelled() => {
+                        tracing::debug!("Closing connection to {} due to server shutdown", tcp_addr);
+                    }
+                    res = handle_tcp_accept(pkarr_client, Ok((stream, tcp_addr)), endpoint, true, &alpn) => {
+                        if let Err(cause) = res {
+                            tracing::warn!("error handling connection from {}: {}", tcp_addr, cause);
+                        }
+                    }
                 }
             });
         }
+
+        // 3. Cleanup logic after loop break
+        endpoint.close().await;
+        tracing::info!("P2P server task terminated.");
     });
 
-    // 4. Return successfully to Flutter right after the task is spawned.
     Ok(())
 }
 
 /// Listen on an endpoint and forward incoming connections to a tcp socket.
 pub async fn p2p_server(
+    pkarr_client: Client,
     host: String,
     url_name: String,
     ipv4_addr: Option<SocketAddrV4>,
     cancel_token: CancellationToken, // Inject the token from Flutter here
 ) -> Result<()> {
+    // 1. Quick early exit check before we do any heavy lifting
+    if cancel_token.is_cancelled() {
+        tracing::info!("Cancellation requested before startup. Aborting.");
+        return Ok(());
+    }
+
     let addrs = match host.to_socket_addrs() {
         Ok(addrs) => addrs.collect::<Vec<_>>(),
         Err(e) => bail_any!("invalid host string {}: {}", host, e),
     };
     let secret_key = get_or_create_secret()?;
-    // let secret_key = SecretKey::from_str("7e7401dc4939595037d7cd24e24b827b5f6794aa6910b9eb9280425416e1eec8").std_context("invalid secret")?;
     let endpoint = create_endpoint(secret_key, ipv4_addr, vec![ALPN.into()]).await?;
-    // wait for the endpoint to figure out its address before making a ticket
-    if (tokio::time::timeout(ONLINE_TIMEOUT, endpoint.online()).await).is_err() {
-        eprintln!("Warning: Failed to connect to the home relay");
+
+    // 2. Race the endpoint online check against the cancellation token
+    tokio::select! {
+        _ = cancel_token.cancelled() => {
+            tracing::info!("Cancellation requested while waiting for endpoint. Aborting.");
+            return Ok(());
+        }
+        res = tokio::time::timeout(ONLINE_TIMEOUT, endpoint.online()) => {
+            if res.is_err() {
+                eprintln!("Warning: Failed to connect to the home relay");
+            }
+        }
     }
+
     let addr = endpoint.addr();
     let ticket = EndpointTicket::new(addr);
 
-    // print the ticket on stderr so it doesn't interfere with the data itself
-    //
-    // note that the tests rely on the ticket being the last thing printed
-    eprintln!("Forwarding incoming requests to '{}'.", host);
-    eprintln!("To connect, use e.g.:");
-    eprintln!("dumbpipe connect-tcp {ticket}");
-    /*if args.common.verbose > 0 {
-        eprintln!("or:\ndumbpipe connect-tcp {short}");
-    }*/
     tracing::info!("endpoint id is {}", ticket.endpoint_addr().id);
     tracing::info!(
         "relay url is {:?}",
@@ -396,14 +424,23 @@ pub async fn p2p_server(
             .map_or("None".to_string(), |url| url.to_string())
     );
 
-    publish_iroh_mapping(
-        create_pkarr_client().unwrap(),
-        url_name,
-        ticket.to_string(),
-        CancellationToken::new(),
-        None,
-        None,
-    ).await?;
+    // 3. Race the publishing against the token AND pass the cloned token into the function
+    tokio::select! {
+        _ = cancel_token.cancelled() => {
+            tracing::info!("Cancellation requested while publishing mapping. Aborting.");
+            return Ok(());
+        }
+        res = publish_iroh_mapping(
+            pkarr_client,
+            url_name,
+            ticket.to_string(),
+            cancel_token.clone(), // Pass the actual token so the child task can abort gracefully
+            None,
+            None,
+        ) => {
+            res?; // Bubble up any errors from the publishing process
+        }
+    }
 
     // We move handle_endpoint_accept inside so it can be easily
     // captured or used by the spawned task without lifetime issues.
