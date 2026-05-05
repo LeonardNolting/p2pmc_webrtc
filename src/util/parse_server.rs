@@ -1,103 +1,141 @@
-use std::io::Result;
-use anyhow::bail;
+use anyhow::Context;
 use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
 use tracing::info;
 use url::Url;
 
-#[tracing::instrument(skip(stream))]
-pub(crate) async fn parse_server(stream: &mut TcpStream) -> anyhow::Result<String> {
-    let server_address = get_server_address(stream).await?;
-    let domain = Url::parse(&server_address).map_or_else(|error| {
-        server_address
-    }, move |url| {
-        let domain = url.domain().expect("The client connected not via a domain, can't read domain").to_string();
-        domain
-    });
-    let mut domains: Vec<&str> = domain.split(".").collect();
-    domains.reverse();
-     if domains.len() != 3 ||  domains[0] != "gg" || domains[1] != "jude" {
-        bail!("Couldn't read subdomain from URL, domains: {:?}", domains);
-    }
-    let to_id = domains.last().unwrap().to_string();
-    info!("Parsed server from domain: {to_id}");
-    Ok(to_id)
+use crate::util::mc_disconnect::decode_varint;
+
+// Re-export so callers don't need to import mc_disconnect directly for this type.
+/// Everything extracted from the Minecraft Handshake packet that we need
+/// both to route the connection and to send well-formed error replies.
+pub struct HandshakeInfo {
+    /// The subdomain component we route on (e.g. "myserver" from "myserver.jude.gg").
+    pub server_id: String,
+    /// Raw protocol version from the Handshake packet; used to pick NBT vs JSON
+    /// encoding for Login Disconnect packets.
+    pub protocol_version: i32,
+    /// next_state field from the Handshake: 1 = Status, 2 = Login.
+    /// We should only send Login Disconnect when this is 2.
+    pub next_state: i32,
+    /// Total length of the handshake packet (including the VarInt length prefix).
+    pub packet_len: usize,
 }
 
-pub(crate) async fn get_server_address(stream: &mut TcpStream) -> Result<String> {
-    // Create a buffer large enough for the initial handshake packet
-    // TODO let length depend on size of first packet
-    let mut peek_buf = vec![0u8; 1024];
+// -----------------------------------------------------------------------------
+// Public entry point (replaces the old parse_server)
+// -----------------------------------------------------------------------------
 
-    // Peek at the data without consuming it
+#[tracing::instrument(skip(stream))]
+pub(crate) async fn parse_handshake(stream: &mut TcpStream) -> anyhow::Result<HandshakeInfo> {
+    let handshake_timeout = Duration::from_millis(500);
+
+    timeout(handshake_timeout, read_handshake(stream))
+        .await
+        .context("Handshake timed out")?
+}
+
+// -----------------------------------------------------------------------------
+// Internal implementation
+// -----------------------------------------------------------------------------
+
+async fn read_handshake(stream: &mut TcpStream) -> anyhow::Result<HandshakeInfo> {
+    // Peek so the bytes remain available for the peer once we start forwarding.
+    // 300 bytes is plenty for a Handshake (server address is capped at 255 chars
+    // by the protocol, plus VarInt overhead).
+    let mut peek_buf = vec![0u8; 512];
     let bytes_read = stream.peek(&mut peek_buf).await?;
 
     if bytes_read == 0 {
-        // TODO handle properly .. after leaving?
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "Connection closed before receiving handshake"
-        ));
+        anyhow::bail!("Connection closed before receiving handshake");
     }
 
-    // Create a cursor to read the peeked data
-    let mut reader = std::io::Cursor::new(&peek_buf[..bytes_read]);
-
-    // Read packet length (VarInt)
-    let mut packet_length = 0;
-    let mut shift = 0;
-    loop {
-        let byte = reader.get_ref()[reader.position() as usize];
-        reader.set_position(reader.position() + 1);
-
-        packet_length |= ((byte & 0b0111_1111) as i32) << shift;
-        if (byte & 0b1000_0000) == 0 {
-            break;
-        }
-        shift += 7;
-    }
-
-    // Read packet ID (VarInt) - we don't need this but must skip it
-    let mut shift = 0;
-    loop {
-        let byte = reader.get_ref()[reader.position() as usize];
-        reader.set_position(reader.position() + 1);
-
-        if (byte & 0b1000_0000) == 0 {
-            break;
-        }
-        shift += 7;
-    }
-
-    // Read protocol version (VarInt) - skip it
-    let mut shift = 0;
-    loop {
-        let byte = reader.get_ref()[reader.position() as usize];
-        reader.set_position(reader.position() + 1);
-
-        if (byte & 0b1000_0000) == 0 {
-            break;
-        }
-        shift += 7;
-    }
-
-    // Read server address length (VarInt)
-    let mut address_length = 0;
-    let mut shift = 0;
-    loop {
-        let byte = reader.get_ref()[reader.position() as usize];
-        reader.set_position(reader.position() + 1);
-
-        address_length |= ((byte & 0b0111_1111) as i32) << shift;
-        if (byte & 0b1000_0000) == 0 {
-            break;
-        }
-        shift += 7;
-    }
-
-    // Read the server address
-    let start_pos = reader.position() as usize;
-    let address_bytes = &reader.get_ref()[start_pos..start_pos + address_length as usize];
-    let server_address = String::from_utf8_lossy(address_bytes).to_string();
-
-    Ok(server_address)
+    let buf = &peek_buf[..bytes_read];
+    tracing::debug!("Peeked handshake buffer ({} bytes): {:02x?}", bytes_read, buf);
+    parse_handshake_buf(buf)
 }
+
+/// Pure parsing of a raw handshake buffer — no I/O, fully testable.
+fn parse_handshake_buf(buf: &[u8]) -> anyhow::Result<HandshakeInfo> {
+    let mut pos = 0;
+
+    // ---- packet length (VarInt) ----
+    let (packet_body_len, n) = decode_varint(&buf[pos..])
+        .ok_or_else(|| anyhow::anyhow!("Failed to read packet length"))?;
+    let packet_len = (packet_body_len as usize) + n;
+    tracing::debug!("Packet body length: {}, VarInt length: {}", packet_body_len, n);
+    pos += n;
+
+    // ---- packet ID (VarInt, must be 0x00 for Handshake) ----
+    let (packet_id, n) = decode_varint(&buf[pos..])
+        .ok_or_else(|| anyhow::anyhow!("Failed to read packet ID"))?;
+    pos += n;
+    anyhow::ensure!(packet_id == 0x00, "Unexpected packet ID {packet_id:#04x}, expected Handshake (0x00)");
+
+    // ---- protocol version (VarInt, keep!) ----
+    let (protocol_version, n) = decode_varint(&buf[pos..])
+        .ok_or_else(|| anyhow::anyhow!("Failed to read protocol version"))?;
+    pos += n;
+    tracing::info!("Detected protocol version: {}", protocol_version);
+
+    // ---- server address (VarInt length + UTF-8) ----
+    let (addr_len, n) = decode_varint(&buf[pos..])
+        .ok_or_else(|| anyhow::anyhow!("Failed to read server address length"))?;
+    pos += n;
+
+    let addr_len = addr_len as usize;
+    anyhow::ensure!(
+        pos + addr_len <= buf.len(),
+        "Server address truncated in peek buffer (need {} bytes, have {})",
+        addr_len,
+        buf.len() - pos
+    );
+    let server_address = String::from_utf8_lossy(&buf[pos..pos + addr_len]).into_owned();
+    pos += addr_len;
+
+    // ---- server port (u16, skip) ----
+    pos += 2;
+
+    // ---- next_state (VarInt) ----
+    let (next_state, _) = decode_varint(&buf[pos..])
+        .ok_or_else(|| anyhow::anyhow!("Failed to read next_state"))?;
+
+    // ---- extract the routing subdomain ----
+    // Strip the FML/Forge marker that some clients append (e.g. "host\x00FML2\x00")
+    let clean_address = server_address
+        .split('\x00')
+        .next()
+        .unwrap_or(&server_address);
+
+    let domain = Url::parse(clean_address).map_or_else(
+        |_| clean_address.to_string(),
+        |url| {
+            url.domain()
+                .unwrap_or(clean_address)
+                .to_string()
+        },
+    );
+
+    // Reverse domain components and take the last (outermost) subdomain.
+    // "myserver.jude.gg" → ["gg", "jude", "myserver"] → last = "myserver"
+    let mut parts: Vec<&str> = domain.split('.').collect();
+    parts.reverse();
+    let server_id = parts
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("Could not extract server ID from domain '{domain}'"))?
+        .to_string();
+
+    info!(
+        protocol_version,
+        server_id,
+        next_state,
+        "Parsed handshake"
+    );
+
+    Ok(HandshakeInfo {
+        server_id,
+        protocol_version,
+        next_state,
+        packet_len,
+    })
+    }

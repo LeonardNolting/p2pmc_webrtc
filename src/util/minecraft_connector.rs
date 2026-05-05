@@ -2,12 +2,12 @@ use tokio::net::TcpStream;
 use tracing::{info, instrument};
 
 #[derive(Debug)]
-pub struct MinecraftConnector;
+pub(crate) struct MinecraftConnector;
 
 impl MinecraftConnector {
     /// Connects to a Minecraft server with proper configuration
     #[instrument]
-    pub async fn connect<A: tokio::net::ToSocketAddrs + std::fmt::Debug>(
+    pub(crate) async fn connect<A: tokio::net::ToSocketAddrs + std::fmt::Debug>(
         addr: A,
     ) -> std::io::Result<TcpStream> {
         info!("Connecting to Minecraft server at {:?}", addr);

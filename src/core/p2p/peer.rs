@@ -1,5 +1,5 @@
-pub struct Peer {
-    pub id: PeerId,
+pub(crate) struct Peer {
+    pub(crate) id: PeerId,
 }
 
 pub type PeerId = String;

@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 use webrtc::data::data_channel::DataChannel;
 use tokio_util::sync::CancellationToken;
 
-pub async fn proxy_traffic(
+pub(crate) async fn proxy_traffic(
     data_channel: Arc<DataChannel>,
     tcp_stream: TcpStream,
     cancel_token: CancellationToken
